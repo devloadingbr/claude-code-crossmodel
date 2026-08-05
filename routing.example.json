@@ -1,0 +1,24 @@
+{
+  "_comment": "Copy to routing.json and edit. This is the policy the #route hook injects. Set measured:true only after you have run bench/battery.mjs against tasks that look like your real work — the flag changes the wording of the injected caveat, so lying to yourself here defeats the point.",
+
+  "trigger": "#route",
+  "measured": true,
+
+  "rules": [
+    ["Self-contained function from a spec, with tests", "`delegate` with luna  [8/8 incl. brutal tier]"],
+    ["Convert / extract / normalise structured data", "`delegate` with luna  [format 5/5]"],
+    ["Classify or triage a batch into a closed list", "`delegate` with luna  [tied with opus]"],
+    ["Filter candidates in a broad sweep", "luna filters, opus confirms"],
+    ["Implement inside the existing codebase", "sonnet subagent  [not measured: external models have no repo context]"],
+    ["Investigate / diagnose in the repo", "sonnet subagent, read-only  [not measured]"],
+    ["Read a lot, conclude a little", "ALWAYS a subagent — the win is the context that never enters yours"],
+    ["Final review, subtle defect, security", "opus, main loop  [only model stable at 100% across runs]"],
+    ["Trade-off that is expensive to reverse", "opus, main loop"],
+    ["Independent second opinion", "`delegate` with sol — the value is a different model family, not higher capability"]
+  ],
+
+  "unused": [
+    ["haiku", "no measured advantage over luna, ~3x slower, and spends the quota we are trying to save"],
+    ["terra", "the only model to miss a coding task in our run; luna covers everything it does"]
+  ]
+}

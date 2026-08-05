@@ -1,0 +1,18 @@
+{
+  "description": "crossmodel — injects the model routing policy when the trigger word appears in a prompt. Silent and zero-cost on every other turn.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/route.mjs"],
+            "timeout": 10,
+            "statusMessage": "crossmodel routing"
+          }
+        ]
+      }
+    ]
+  }
+}

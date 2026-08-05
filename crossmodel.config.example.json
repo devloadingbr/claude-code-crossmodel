@@ -1,0 +1,34 @@
+{
+  "_comment": "Copy to crossmodel.config.json (next to bench/providers.mjs, or at the repo root) to add or override providers and model aliases. Merged over the built-ins, so you can also replace a built-in by reusing its key.",
+
+  "providers": {
+    "openrouter": {
+      "_note": "Already built in — shown here so you can see the shape. Just set OPENROUTER_API_KEY.",
+      "kind": "http",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY"
+    },
+
+    "groq": {
+      "kind": "http",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "apiKeyEnv": "GROQ_API_KEY"
+    },
+
+    "lmstudio": {
+      "_note": "Local server, no key needed. apiKeyEnv omitted means no auth header is sent.",
+      "kind": "http",
+      "baseUrl": "http://localhost:1234/v1"
+    }
+  },
+
+  "models": {
+    "_comment_models": "Aliases are what you type in --model and in the routing policy. Keep them short.",
+
+    "or-sonnet": { "provider": "openrouter", "model": "anthropic/claude-sonnet-4.5" },
+    "or-deepseek": { "provider": "openrouter", "model": "deepseek/deepseek-chat" },
+    "groq-fast": { "provider": "groq", "model": "llama-3.3-70b-versatile" },
+    "local": { "provider": "ollama", "model": "qwen2.5-coder" },
+    "gem": { "provider": "gemini", "model": "gemini-2.5-pro" }
+  }
+}

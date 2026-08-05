@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "hasBug": {
+      "type": "boolean",
+      "description": "true only if the snippet contains a CORRECTNESS defect: wrong behaviour, data leaking across tenants, a silently swallowed failure, an unawaited promise, or a non-deterministic result. Style, naming, formatting and architectural preference are NOT bugs."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One sentence naming the defect when hasBug is true. Empty string when hasBug is false."
+    },
+    "confidence": {
+      "type": "number",
+      "description": "0.0 to 1.0 — how sure you are."
+    }
+  },
+  "required": ["hasBug", "summary", "confidence"],
+  "additionalProperties": false
+}

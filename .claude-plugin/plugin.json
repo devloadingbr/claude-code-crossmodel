@@ -1,0 +1,26 @@
+{
+  "name": "crossmodel",
+  "version": "0.1.0",
+  "description": "Delegate work from Claude Code to any external LLM CLI — OpenAI Codex, Gemini, Ollama, or your own — spending that provider's quota instead of your Anthropic quota. Ships with a deterministic benchmark so you route by evidence, not vibes.",
+  "author": {
+    "name": "Marcelo",
+    "url": "https://github.com/devloadingbr"
+  },
+  "homepage": "https://github.com/devloadingbr/crossmodel#readme",
+  "repository": "https://github.com/devloadingbr/crossmodel",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "multi-model",
+    "model-routing",
+    "llm",
+    "codex",
+    "openai",
+    "gemini",
+    "ollama",
+    "benchmark",
+    "quota",
+    "subagent"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

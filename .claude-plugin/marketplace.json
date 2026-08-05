@@ -1,0 +1,34 @@
+{
+  "name": "crossmodel",
+  "owner": {
+    "name": "Marcelo",
+    "url": "https://github.com/devloadingbr"
+  },
+  "metadata": {
+    "description": "Cross-provider model routing for Claude Code",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "crossmodel",
+      "source": "./",
+      "description": "Delegate work from Claude Code to any external LLM CLI (Codex, Gemini, Ollama, or your own), spending that provider's quota instead of your Anthropic quota. Includes a deterministic multi-provider benchmark to decide what each model can be trusted with.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Marcelo"
+      },
+      "category": "development",
+      "keywords": [
+        "claude-code",
+        "multi-model",
+        "model-routing",
+        "llm",
+        "codex",
+        "gemini",
+        "ollama",
+        "benchmark",
+        "quota"
+      ]
+    }
+  ]
+}

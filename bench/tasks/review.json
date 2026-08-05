@@ -1,0 +1,80 @@
+[
+  {
+    "id": "tenant-isolation-01-bug",
+    "category": "tenant-isolation",
+    "hasBug": true,
+    "marker": ["workspace", "tenant", "filter", "leak", "isolat"],
+    "code": "// src/modules/projects/queries.ts\n// CONTEXT NOTE: createAdminClient() uses an admin credential that BYPASSES all\n// row-level security policies. In this multi-tenant project, every workspace\n// boundary must be enforced explicitly in the query itself.\nexport async function listProjectsByOwner(ownerId: string) {\n  const db = createAdminClient()\n  const { data, error } = await db\n    .table('projects')\n    .select('id, name, status, ownerId')\n    .where('ownerId', ownerId)\n    .orderBy('name')\n  if (error) return { ok: false as const, error }\n  return { ok: true as const, data }\n}"
+  },
+  {
+    "id": "tenant-isolation-01-clean",
+    "category": "tenant-isolation",
+    "hasBug": false,
+    "code": "// src/modules/projects/queries.ts\n// CONTEXT NOTE: createAdminClient() uses an admin credential that BYPASSES all\n// row-level security policies. In this multi-tenant project, every workspace\n// boundary must be enforced explicitly in the query itself.\nexport async function listProjectsByOwner(ownerId: string, workspaceId: string) {\n  const db = createAdminClient()\n  const { data, error } = await db\n    .table('projects')\n    .select('id, name, status, ownerId')\n    .where('workspaceId', workspaceId)\n    .where('ownerId', ownerId)\n    .orderBy('name')\n  if (error) return { ok: false as const, error }\n  return { ok: true as const, data }\n}"
+  },
+  {
+    "id": "cache-multitenant-02-bug",
+    "category": "cache-multitenant",
+    "hasBug": true,
+    "marker": ["vary", "host", "cache", "cdn", "tenant"],
+    "code": "// app/api/catalog/route.ts — multi-tenant SaaS, one workspace per domain\nexport async function GET(req: Request) {\n  const workspace = await resolveWorkspaceByHost(req.headers.get('host'))\n  if (!workspace) return new Response('not found', { status: 404 })\n  const items = await listCatalog(workspace.id)\n  return Response.json(items, {\n    headers: { 'Cache-Control': 'public, s-maxage=300' },\n  })\n}"
+  },
+  {
+    "id": "cache-multitenant-02-clean",
+    "category": "cache-multitenant",
+    "hasBug": false,
+    "code": "// app/api/catalog/route.ts — multi-tenant SaaS, one workspace per domain\nexport async function GET(req: Request) {\n  const workspace = await resolveWorkspaceByHost(req.headers.get('host'))\n  if (!workspace) return new Response('not found', { status: 404 })\n  const items = await listCatalog(workspace.id)\n  return Response.json(items, {\n    headers: { 'Cache-Control': 'public, s-maxage=300', 'Vary': 'Host' },\n  })\n}"
+  },
+  {
+    "id": "async-03-bug",
+    "category": "async",
+    "hasBug": true,
+    "marker": ["await", "promise", "async", "race"],
+    "code": "// src/modules/invitations/service.ts\nexport async function createInvitation(input: NewInvitation) {\n  const invitation = await insertInvitation(input)\n  notifyMember(invitation.memberId, invitation.id)\n  await recordAuditLog('invitation.created', invitation.id)\n  return invitation\n}\n\nasync function notifyMember(memberId: string, invitationId: string) {\n  const member = await findMember(memberId)\n  await sendEmail(member.email, buildMessage(invitationId))\n}"
+  },
+  {
+    "id": "async-03-clean",
+    "category": "async",
+    "hasBug": false,
+    "code": "// src/modules/invitations/service.ts\nexport async function createInvitation(input: NewInvitation) {\n  const invitation = await insertInvitation(input)\n  await notifyMember(invitation.memberId, invitation.id)\n  await recordAuditLog('invitation.created', invitation.id)\n  return invitation\n}\n\nasync function notifyMember(memberId: string, invitationId: string) {\n  const member = await findMember(memberId)\n  await sendEmail(member.email, buildMessage(invitationId))\n}"
+  },
+  {
+    "id": "silent-error-04-bug",
+    "category": "silent-error",
+    "hasBug": true,
+    "marker": ["catch", "silent", "swallow", "empty", "ignor"],
+    "code": "// src/lib/integrations/webhook.ts\nexport async function emitWebhookEvent(orderId: string): Promise<string | null> {\n  try {\n    const payload = await buildPayload(orderId)\n    const res = await fetch(WEBHOOK_URL, { method: 'POST', body: JSON.stringify(payload) })\n    const json = await res.json()\n    return json.eventId\n  } catch {\n  }\n  return null\n}"
+  },
+  {
+    "id": "silent-error-04-clean",
+    "category": "silent-error",
+    "hasBug": false,
+    "code": "// src/lib/integrations/webhook.ts\ntype Result = { ok: true; eventId: string } | { ok: false; error: string }\n\nexport async function emitWebhookEvent(orderId: string): Promise<Result> {\n  try {\n    const payload = await buildPayload(orderId)\n    const res = await fetch(WEBHOOK_URL, { method: 'POST', body: JSON.stringify(payload) })\n    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }\n    const json = await res.json()\n    return { ok: true, eventId: json.eventId }\n  } catch (e) {\n    logger.error({ orderId, e }, 'failed to emit webhook event')\n    return { ok: false, error: String(e) }\n  }\n}"
+  },
+  {
+    "id": "http-status-05-bug",
+    "category": "http-status",
+    "hasBug": true,
+    "marker": ["status", "res.ok", "http", "check", "verify"],
+    "code": "// src/jobs/sync-inventory.ts — runs on a daily cron\nexport async function syncInventory() {\n  const res = await fetch(`${ERP_URL}/inventory`, {\n    headers: { Authorization: `Bearer ${process.env.ERP_TOKEN}` },\n  })\n  const items = await res.json()\n  for (const item of items) {\n    await updateStock(item.sku, item.stock)\n  }\n  console.log('sync complete:', items.length)\n}"
+  },
+  {
+    "id": "http-status-05-clean",
+    "category": "http-status",
+    "hasBug": false,
+    "code": "// src/jobs/sync-inventory.ts — runs on a daily cron\nexport async function syncInventory() {\n  const res = await fetch(`${ERP_URL}/inventory`, {\n    headers: { Authorization: `Bearer ${process.env.ERP_TOKEN}` },\n  })\n  if (!res.ok) throw new IntegrationError(`ERP responded ${res.status}`)\n  const items = await res.json()\n  for (const item of items) {\n    await updateStock(item.sku, item.stock)\n  }\n  console.log('sync complete:', items.length)\n}"
+  },
+  {
+    "id": "determinism-06-bug",
+    "category": "determinism",
+    "hasBug": true,
+    "marker": ["date", "clock", "determin", "now", "inject"],
+    "code": "// src/modules/subscriptions/rules.ts — pure billing logic\nexport function calculateNextBillingDate(subscription: Subscription): Date {\n  const today = new Date()\n  const next = new Date(subscription.lastBilledAt)\n  next.setMonth(next.getMonth() + subscription.periodMonths)\n  if (next < today) return today\n  return next\n}"
+  },
+  {
+    "id": "determinism-06-clean",
+    "category": "determinism",
+    "hasBug": false,
+    "code": "// src/modules/subscriptions/rules.ts — pure billing logic\nexport function calculateNextBillingDate(subscription: Subscription, now: Date): Date {\n  const base = new Date(subscription.lastBilledAt)\n  const day = base.getUTCDate()\n  const target = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + subscription.periodMonths, 1))\n  const lastDayOfMonth = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate()\n  target.setUTCDate(Math.min(day, lastDayOfMonth))\n  return target < now ? now : target\n}"
+  }
+]

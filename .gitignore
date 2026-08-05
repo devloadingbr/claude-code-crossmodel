@@ -1,0 +1,10 @@
+# Benchmark output — machine- and run-specific, never commit
+bench/results/
+
+# User config — everyone's registry and policy differ
+crossmodel.config.json
+routing.json
+
+node_modules/
+*.log
+.DS_Store
