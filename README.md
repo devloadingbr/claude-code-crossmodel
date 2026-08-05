@@ -19,7 +19,7 @@ decides.
 ## Install
 
 ```bash
-/plugin marketplace add devloadingbr/crossmodel
+/plugin marketplace add devloadingbr/claude-code-crossmodel
 /plugin install crossmodel@crossmodel
 ```
 

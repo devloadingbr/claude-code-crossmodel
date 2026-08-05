@@ -63,7 +63,7 @@ export const BUILTIN_PROVIDERS = {
     baseUrl: 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
     headers: {
-      'HTTP-Referer': 'https://github.com/devloadingbr/crossmodel',
+      'HTTP-Referer': 'https://github.com/devloadingbr/claude-code-crossmodel',
       'X-Title': 'crossmodel',
     },
   },
