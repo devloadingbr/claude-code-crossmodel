@@ -5,19 +5,19 @@
 //   crossmodel --model luna --file ./patch.diff "Review this diff"
 //   crossmodel --list
 //
-// Transport (local CLI vs HTTP API) is resolved from the registry, so the caller
-// never needs to know whether `luna` is a Codex subprocess or an OpenRouter request.
+// Every provider is an agentic CLI: it runs in a working directory, reads the tree, and
+// with --write may edit inside it. The alias hides which binary that is.
 //
 // Exit codes:
 //   0  success — the model's answer is on stdout
 //   1  usage error (unknown alias, missing prompt)
-//   2  the call failed (provider unavailable, timeout, HTTP error, non-zero exit)
+//   2  the call failed (provider unavailable, timeout, non-zero exit)
 //
 // Exit code 2 matters: an error must never be mistaken for an answer. Anything
 // consuming this must check the exit code before trusting stdout.
 
 import { readFileSync } from 'node:fs';
-import { callModel, MODELS, availableModels, canReadFiles } from '../bench/providers.mjs';
+import { callModel, MODELS, availableModels } from '../bench/providers.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -36,10 +36,9 @@ if (has('help') || (!argv.length)) {
 
 Options:
   --model <alias>    which model (see --list)
-  --cwd <dir>        directory the model may read and explore. CLI-backed models are
-                     agentic — give them a repo and they will grep and read it
-                     themselves, so you do not have to paste code into the prompt.
-                     Rejected for http-backed models, which have no filesystem.
+  --cwd <dir>        directory the model may read and explore. These CLIs are agentic —
+                     give them a repo and they grep and read it themselves, so you do
+                     not have to paste code into the prompt.
   --write            let the model edit files inside --cwd (required with it). Writes
                      are confined to that directory; anything outside is rejected.
                      Off by default. The model still cannot commit, and cannot reach
@@ -71,10 +70,11 @@ if (has('list')) {
   const av = await availableModels();
   const width = Math.max(...Object.keys(av).map((k) => k.length));
   for (const [alias, v] of Object.entries(av)) {
-    const files = canReadFiles(alias) ? 'reads files' : 'prompt only';
-    console.log(`${v.ok ? '  ok  ' : '  --  '}${alias.padEnd(width)}  ${MODELS[alias].provider}/${MODELS[alias].model}  [${files}]  ${v.ok ? '' : `(${v.why})`}`);
+    const caps = v.ok ? `[reads files${v.write ? ', can --write' : ''}]` : `(${v.why})`;
+    console.log(`${v.ok ? '  ok  ' : '  --  '}${alias.padEnd(width)}  ${MODELS[alias].provider}/${MODELS[alias].model}  ${caps}`);
   }
-  console.log('\n"reads files" = agentic CLI: pass --cwd <dir> and it explores the repo itself.');
+  console.log('\nAll providers are agentic CLIs: pass --cwd <dir> and they explore the repo themselves.');
+  console.log('Nothing here is configured? Run /crossmodel-setup.');
   process.exit(0);
 }
 

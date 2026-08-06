@@ -1,17 +1,20 @@
 # crossmodel
 
-**Delegate work from Claude Code to any other LLM — and know which ones you can trust with what.**
+**Delegate work from Claude Code to another agentic CLI — and know which models you can trust with what.**
 
 Claude Code is excellent at orchestrating. It is also the only thing spending your
-Anthropic quota. `crossmodel` lets a Claude Code session hand self-contained work to an
-external model — OpenAI's Codex CLI, Gemini, a local Ollama model, anything on
-OpenRouter — so that work bills to *that* provider's quota instead.
+Anthropic quota. `crossmodel` hands work to an external agentic CLI — OpenAI's Codex,
+Gemini, a local Ollama model — so it bills to *that* provider's pool instead.
+
+"Agentic" is the load-bearing word. These are not chat endpoints: point one at a
+directory and it greps and reads the tree itself, and with `--write` it edits inside that
+directory. A repo-wide sweep costs their quota, not yours.
 
 The catch nobody addresses: **how do you know what the cheap model can actually do?**
 So this ships with a deterministic benchmark. No LLM judges another LLM; a test suite
 decides.
 
-> **Status: v0.3.0, early.** Works, tested end to end, but the API may move. Issues and
+> **Status: v0.4.0, early.** Works, tested end to end, but the API may move. Issues and
 > PRs welcome.
 
 ---
@@ -23,20 +26,26 @@ decides.
 /plugin install crossmodel@crossmodel
 ```
 
-Then check what's reachable from your machine:
+Restart, then run:
 
-```bash
-node ~/.claude/plugins/cache/crossmodel/crossmodel/*/bin/crossmodel.mjs --list
+```
+/crossmodel-setup
 ```
 
-You need at least one external provider installed and authenticated. The cheapest start
-is OpenAI's Codex CLI, which authenticates with a ChatGPT subscription rather than an
-API key:
+That detects which provider CLIs you have, asks which models you want and what to call
+them, **verifies each one with a real call**, and writes the config. No hand-edited JSON,
+and no alias left in the file that fails the first time you use it.
+
+You need at least one provider installed. The cheapest entry point is OpenAI's Codex,
+because it authenticates with a ChatGPT subscription instead of a metered API key:
 
 ```bash
 npm install -g @openai/codex
 codex login
 ```
+
+Prefer to configure by hand? Copy `crossmodel.config.example.json` to
+`crossmodel.config.json`. The setup skill just does this for you, with verification.
 
 ---
 
@@ -50,8 +59,7 @@ crossmodel --model sol --file patch.diff "List only correctness defects in this 
 crossmodel --list
 ```
 
-Transport is resolved from a registry, so the caller never knows whether `luna` is a
-local subprocess or an HTTPS request.
+The alias hides which binary it is, so nothing downstream cares.
 
 **Exit codes are load-bearing:** `0` success, `1` usage error, `2` the call failed.
 A failed call still produces text, and text looks like an answer — anything consuming
@@ -59,21 +67,16 @@ this must check the exit code first.
 
 #### Repo sweeps — the part worth stealing
 
-CLI-backed models are **agentic**. Point one at a directory and it greps and reads the
-tree itself; you never paste code into the prompt:
-
 ```bash
 crossmodel --model luna --cwd ~/myrepo \
   "Which files handle authentication? Answer as path:line, nothing else."
 ```
 
-A repo-wide sweep costs **that provider's quota, not your Anthropic quota**. In our
-testing a cold sweep of a 14-module project — enumerate the modules, then locate one
-specific function — took ~10s and ~6k tokens, all on the external provider.
+In our testing a cold sweep of a 14-module project — enumerate the modules, then locate
+one specific function by name — returned the correct `file:line` in ~10s on ~6k tokens,
+entirely on the external provider's quota.
 
-`--list` tags every alias `reads files` or `prompt only`. Passing `--cwd` to an
-HTTP-backed model is rejected with an explicit error, never silently ignored: a sweep
-that quietly ran against nothing is worse than one that refused.
+You are not paying to *read* the repo. That is the whole trick.
 
 ### 1b. Delegation is visible
 
@@ -88,14 +91,20 @@ crossed:
 It stays silent for Anthropic models and for ordinary commands. It only announces; it
 never blocks.
 
-### 2. `delegate` — a subagent that does the bridging
+### 2. Three subagents, three jobs
 
-Claude Code spawns it, it calls the external model, filters the output, and reports a
-structured result. The raw response never enters your main context.
+| Agent | Model | What it's for |
+|---|---|---|
+| `delegate` | external CLI | The bridge. Sweeps, code from a spec, classification, second opinions. Spends the *other* provider's quota |
+| `probe` | Claude, read-only | Investigation that needs judgement — *why* does this break, *would* this change hurt. Never writes |
+| `slice` | Claude | Implement one slice inside existing code, run the project gate, report. Never commits |
 
-Its system prompt encodes the parts that are easy to get wrong: validate the exit code,
-never forward an error as a finding, mark claims the external model couldn't verify, and
-refuse the task when building the briefing would cost more than doing the work.
+`delegate` is the one that saves money; `probe` and `slice` exist so the routing policy
+has somewhere to escalate *to*. `probe` opens by asking whether it should be `delegate`
+instead — a mechanical lookup on Anthropic quota is waste, and it says so.
+
+Each system prompt encodes the failure modes: validate exit codes, never forward an error
+as a finding, separate confirmed from suspected, never invent an API, never commit.
 
 ### 3. `#route` — a routing policy that fires on demand
 
@@ -199,32 +208,35 @@ bug in a sample we had labelled "clean". A benchmark is a rumour until you verif
 
 ---
 
-## Adding a provider
+## Adding models and providers
 
-Two transports, both data-driven. Drop a `crossmodel.config.json` next to
-`bench/providers.mjs`:
+**A new model on an existing provider** is a config change — `/crossmodel-setup` writes
+it, or do it by hand:
 
 ```json
 {
-  "providers": {
-    "myapi": {
-      "kind": "http",
-      "baseUrl": "https://api.example.com/v1",
-      "apiKeyEnv": "MY_API_KEY"
-    }
-  },
   "models": {
-    "fast": { "provider": "myapi", "model": "some-model-id" },
+    "fast":  { "provider": "codex",  "model": "gpt-5.6-luna" },
     "local": { "provider": "ollama", "model": "qwen2.5-coder" }
   }
 }
 ```
 
-`kind: "http"` expects an OpenAI-compatible `/chat/completions` endpoint, which covers
-OpenRouter, Together, Groq, vLLM, and LM Studio. `kind: "cli"` spawns a command.
+**A new provider** needs an `args()` builder — how to turn `(model, prompt, cwd, write)`
+into that CLI's argument list — which JSON can't express. It belongs in
+`bench/providers.mjs` as a pull request. It is about ten lines; see `codex` for the shape,
+including how a sandbox flag maps to `write`.
 
-Built in: `claude`, `codex`, `gemini`, `ollama`, `openrouter`, and a generic
-`openai-compatible`.
+Built in: `codex`, `gemini`, `ollama`, and `claude` (as the benchmark baseline).
+
+### Why CLI only, and no HTTP APIs
+
+An earlier version supported OpenAI-compatible HTTP endpoints. It was removed.
+
+A stateless endpoint only sees the prompt text — it can't sweep your repo, can't run your
+tests, can't iterate. Supporting both meant every feature needed two paths and every
+document needed a caveat, in exchange for a much weaker version of the product. Scope
+discipline beat surface area: if it can't read your working directory, it's out.
 
 ---
 

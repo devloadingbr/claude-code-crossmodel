@@ -1,7 +1,7 @@
 {
   "name": "crossmodel",
-  "version": "0.3.0",
-  "description": "Delegate work from Claude Code to any external LLM CLI — OpenAI Codex, Gemini, Ollama, or your own — spending that provider's quota instead of your Anthropic quota. Ships with a deterministic benchmark so you route by evidence, not vibes.",
+  "version": "0.4.0",
+  "description": "Delegate work from Claude Code to an external agentic CLI — OpenAI Codex, Gemini, Ollama — spending that provider's quota instead of your Anthropic quota. They sweep your repo and write code in an isolated scope; you review and commit. Includes a deterministic benchmark so you route by evidence.",
   "author": {
     "name": "Marcelo",
     "url": "https://github.com/devloadingbr"
@@ -22,5 +22,7 @@
     "quota",
     "subagent"
   ],
-  "hooks": "./hooks/hooks.json"
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/",
+  "agents": "./agents/"
 }

@@ -1,34 +1,14 @@
 {
-  "_comment": "Copy to crossmodel.config.json (next to bench/providers.mjs, or at the repo root) to add or override providers and model aliases. Merged over the built-ins, so you can also replace a built-in by reusing its key.",
-
-  "providers": {
-    "openrouter": {
-      "_note": "Already built in — shown here so you can see the shape. Just set OPENROUTER_API_KEY.",
-      "kind": "http",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "apiKeyEnv": "OPENROUTER_API_KEY"
-    },
-
-    "groq": {
-      "kind": "http",
-      "baseUrl": "https://api.groq.com/openai/v1",
-      "apiKeyEnv": "GROQ_API_KEY"
-    },
-
-    "lmstudio": {
-      "_note": "Local server, no key needed. apiKeyEnv omitted means no auth header is sent.",
-      "kind": "http",
-      "baseUrl": "http://localhost:1234/v1"
-    }
-  },
+  "_comment": "Copy to crossmodel.config.json (next to bench/providers.mjs) to register your own model aliases. Merged over the built-ins, so reusing a key replaces it. Easiest path: run /crossmodel-setup instead of writing this by hand.",
 
   "models": {
-    "_comment_models": "Aliases are what you type in --model and in the routing policy. Keep them short.",
+    "_comment_models": "Aliases are what you type in --model and in routing.json. Keep them short — you will type them constantly.",
 
-    "or-sonnet": { "provider": "openrouter", "model": "anthropic/claude-sonnet-4.5" },
-    "or-deepseek": { "provider": "openrouter", "model": "deepseek/deepseek-chat" },
-    "groq-fast": { "provider": "groq", "model": "llama-3.3-70b-versatile" },
+    "fast":  { "provider": "codex",  "model": "gpt-5.6-luna" },
+    "smart": { "provider": "codex",  "model": "gpt-5.6-sol" },
     "local": { "provider": "ollama", "model": "qwen2.5-coder" },
-    "gem": { "provider": "gemini", "model": "gemini-2.5-pro" }
-  }
+    "gem":   { "provider": "gemini", "model": "gemini-2.5-pro" }
+  },
+
+  "_comment_providers": "Adding a NEW provider needs an args() builder, which JSON cannot express — it belongs in bench/providers.mjs as a pull request. Built in: codex, gemini, ollama, claude."
 }

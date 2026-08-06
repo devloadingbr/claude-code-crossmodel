@@ -85,15 +85,12 @@ typecheck, a schema validation, a closed list, a project gate. A benchmark score
 measures the pair model+verifier, not the model alone: remove the verifier and you have
 no way to know when it was wrong. No verifier available? Move it up a tier.
 
-HOW DELEGATION ACTUALLY WORKS — know which transport you are on
-CLI-backed models (codex, gemini, ollama) are AGENTIC: give them --cwd and they grep and
-read the tree themselves. You do not have to paste code into the prompt, and a repo-wide
-sweep costs their quota, not yours. They do not WRITE here — that is this plugin's
-read-only choice, not a limitation of the tool.
-HTTP-backed models (openrouter and friends) are stateless: they see only your prompt.
-For those, and only those, the briefing must be fully self-contained.
-
-Either way the external model cannot see THIS conversation, so state the goal explicitly.
+HOW DELEGATION ACTUALLY WORKS
+Every provider here is an AGENTIC CLI: give it --cwd and it greps and reads the tree
+itself. You do not paste code into the prompt, and a repo-wide sweep costs their quota,
+not yours. With --write it may also edit, confined to that directory.
+What it cannot see is THIS conversation — so state the goal, the constraints and the
+definition of done explicitly, every time.
 
 SUBAGENTS WRITE AND PROVE — YOU REVIEW AND COMMIT
 Delegated models may edit files (--write with an explicit --cwd, confined to it) and must
