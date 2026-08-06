@@ -17,7 +17,7 @@
 // consuming this must check the exit code before trusting stdout.
 
 import { readFileSync } from 'node:fs';
-import { callModel, MODELS, availableModels } from '../bench/providers.mjs';
+import { callModel, MODELS, availableModels, canReadFiles } from '../bench/providers.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -31,16 +31,25 @@ if (has('help') || (!argv.length)) {
 
   crossmodel --model <alias> "<prompt>"
   crossmodel --model <alias> --file <path> "<instruction>"
+  crossmodel --model <alias> --cwd <dir> "<sweep instruction>"
   crossmodel --list
 
 Options:
   --model <alias>    which model (see --list)
+  --cwd <dir>        directory the model may read and explore. CLI-backed models are
+                     agentic — give them a repo and they will grep and read it
+                     themselves, so you do not have to paste code into the prompt.
+                     Rejected for http-backed models, which have no filesystem.
   --file <path>      append a file's contents to the prompt
   --timeout <ms>     default 240000
   --schema <path>    JSON Schema for structured output (only providers whose CLI
                      supports it, e.g. codex; silently ignored elsewhere)
   --list             show which models are usable here, then exit
   --quiet            print only the answer, no stderr diagnostics
+
+Sweep example — costs the provider's quota, not yours:
+  crossmodel --model luna --cwd ~/myrepo \
+    "Which files handle authentication? Answer as a list of path:line."
 
 Aliases are defined in bench/providers.mjs and can be extended or overridden with a
 crossmodel.config.json — see crossmodel.config.example.json.`);
@@ -51,8 +60,10 @@ if (has('list')) {
   const av = await availableModels();
   const width = Math.max(...Object.keys(av).map((k) => k.length));
   for (const [alias, v] of Object.entries(av)) {
-    console.log(`${v.ok ? '  ok  ' : '  --  '}${alias.padEnd(width)}  ${MODELS[alias].provider}/${MODELS[alias].model}  ${v.ok ? '' : `(${v.why})`}`);
+    const files = canReadFiles(alias) ? 'reads files' : 'prompt only';
+    console.log(`${v.ok ? '  ok  ' : '  --  '}${alias.padEnd(width)}  ${MODELS[alias].provider}/${MODELS[alias].model}  [${files}]  ${v.ok ? '' : `(${v.why})`}`);
   }
+  console.log('\n"reads files" = agentic CLI: pass --cwd <dir> and it explores the repo itself.');
   process.exit(0);
 }
 
@@ -67,7 +78,7 @@ if (!MODELS[alias]) {
 }
 
 // The prompt is the first bare argument (anything not a flag or a flag's value).
-const flagsTakingValue = new Set(['model', 'file', 'timeout', 'schema']);
+const flagsTakingValue = new Set(['model', 'file', 'timeout', 'schema', 'cwd']);
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -93,9 +104,11 @@ if (!prompt) {
   process.exit(1);
 }
 
+const cwd = flag('cwd');
 const r = await callModel(alias, prompt, {
   timeoutMs: Number(flag('timeout', '240000')),
   schemaPath: flag('schema') ?? undefined,
+  cwd: cwd ?? undefined,
 });
 
 if (!r.ok) {
@@ -104,6 +117,6 @@ if (!r.ok) {
 }
 
 if (!has('quiet')) {
-  console.error(`crossmodel: ${alias} → ${r.provider}/${r.model}, ${r.ms}ms`);
+  console.error(`crossmodel: ${alias} → ${r.provider}/${r.model}, ${r.ms}ms${cwd ? `, swept ${cwd}` : ''}`);
 }
 process.stdout.write(r.text);

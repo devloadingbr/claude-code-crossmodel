@@ -29,9 +29,10 @@ const BUILT_IN = {
     ['Self-contained function from a spec, with tests', 'cheap external model via `delegate`'],
     ['Convert / extract / normalise structured data', 'cheap external model via `delegate`'],
     ['Classify or triage a batch into a closed list', 'cheap external model via `delegate`'],
+    ['Sweep the repo: where is X, which files touch Y', 'cheap CLI-backed model via `delegate` + --cwd'],
+    ['Investigate / diagnose across the repo', 'cheap CLI-backed model + --cwd, strong model confirms'],
     ['Filter candidates in a broad sweep', 'cheap model filters, strong model confirms'],
-    ['Implement inside the existing codebase', 'mid-tier Claude subagent — external models have no repo context'],
-    ['Investigate / diagnose in the repo', 'mid-tier Claude subagent, read-only'],
+    ['Implement inside the existing codebase (writing files)', 'mid-tier Claude subagent — external models are read-only here'],
     ['Read a lot, conclude a little', 'ALWAYS a subagent — the win is the context that never enters yours'],
     ['Final review, subtle defect, security', 'strongest model, main loop'],
     ['Trade-off that is expensive to reverse', 'strongest model, main loop'],
@@ -84,14 +85,18 @@ typecheck, a schema validation, a closed list, a project gate. A benchmark score
 measures the pair model+verifier, not the model alone: remove the verifier and you have
 no way to know when it was wrong. No verifier available? Move it up a tier.
 
-HOW DELEGATION ACTUALLY WORKS
-The external model sees neither this conversation nor the repository, and it does not
-write files. So every delegation is three steps:
-  1. you write a self-contained spec   2. it solves, on that provider's quota
-  3. you apply the result and run the gate
-If step 1 requires reading half the repo, do NOT delegate — you would spend more
-building the briefing than you save. The real lever is restructuring work so it becomes
-self-contained.
+HOW DELEGATION ACTUALLY WORKS — know which transport you are on
+CLI-backed models (codex, gemini, ollama) are AGENTIC: give them --cwd and they grep and
+read the tree themselves. You do not have to paste code into the prompt, and a repo-wide
+sweep costs their quota, not yours. They do not WRITE here — that is this plugin's
+read-only choice, not a limitation of the tool.
+HTTP-backed models (openrouter and friends) are stateless: they see only your prompt.
+For those, and only those, the briefing must be fully self-contained.
+
+Either way the external model cannot see THIS conversation, so state the goal explicitly.
+Delegations that end in a file change are still three steps: it investigates or drafts,
+you apply, you run the gate. Everything passes through you — which is exactly why a
+second writer in the same repo is a separate decision, not a default.
 
 OBLIGATIONS
 1. Subagents do NOT inherit this conversation. Self-contained briefing: objective, file

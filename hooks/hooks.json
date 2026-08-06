@@ -1,5 +1,5 @@
 {
-  "description": "crossmodel — injects the model routing policy when the trigger word appears in a prompt. Silent and zero-cost on every other turn.",
+  "description": "crossmodel — injects the routing policy when the trigger word appears, and announces when a command is about to spend an external provider's quota.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -10,6 +10,19 @@
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/route.mjs"],
             "timeout": 10,
             "statusMessage": "crossmodel routing"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/delegation-notice.mjs"],
+            "timeout": 10
           }
         ]
       }

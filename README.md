@@ -11,7 +11,7 @@ The catch nobody addresses: **how do you know what the cheap model can actually 
 So this ships with a deterministic benchmark. No LLM judges another LLM; a test suite
 decides.
 
-> **Status: v0.1.0, early.** Works, tested end to end, but the API may move. Issues and
+> **Status: v0.2.0, early.** Works, tested end to end, but the API may move. Issues and
 > PRs welcome.
 
 ---
@@ -56,6 +56,37 @@ local subprocess or an HTTPS request.
 **Exit codes are load-bearing:** `0` success, `1` usage error, `2` the call failed.
 A failed call still produces text, and text looks like an answer — anything consuming
 this must check the exit code first.
+
+#### Repo sweeps — the part worth stealing
+
+CLI-backed models are **agentic**. Point one at a directory and it greps and reads the
+tree itself; you never paste code into the prompt:
+
+```bash
+crossmodel --model luna --cwd ~/myrepo \
+  "Which files handle authentication? Answer as path:line, nothing else."
+```
+
+A repo-wide sweep costs **that provider's quota, not your Anthropic quota**. In our
+testing a cold sweep of a 14-module project — enumerate the modules, then locate one
+specific function — took ~10s and ~6k tokens, all on the external provider.
+
+`--list` tags every alias `reads files` or `prompt only`. Passing `--cwd` to an
+HTTP-backed model is rejected with an explicit error, never silently ignored: a sweep
+that quietly ran against nothing is worse than one that refused.
+
+### 1b. Delegation is visible
+
+A `codex exec` and a `grep` look identical in a transcript, so you cannot tell which
+quota pool a turn is draining. A `PreToolUse` hook announces the moment the boundary is
+crossed:
+
+```
+🔶 delegating to luna (gpt-5.6-luna) — spending OpenAI quota, not Anthropic · sweeping /myrepo
+```
+
+It stays silent for Anthropic models and for ordinary commands. It only announces; it
+never blocks.
 
 ### 2. `delegate` — a subagent that does the bridging
 
@@ -161,9 +192,13 @@ Built in: `claude`, `codex`, `gemini`, `ollama`, `openrouter`, and a generic
 - **The bridge costs Anthropic tokens too.** The `delegate` subagent is itself a Claude
   model. For small structured outputs, calling `crossmodel` straight from Bash is
   cheaper; the subagent pays for itself when the output is large or the batch is long.
-- **External models have no repository context.** They cannot see your code, your index,
-  or the conversation. Work that needs the repo does not offload — you would spend more
-  building the briefing than you save.
+- **Only CLI-backed models see your repo.** Agentic CLIs read the tree when given
+  `--cwd`; HTTP-backed models see nothing but the prompt text. Neither can see the
+  *conversation*, so state the goal explicitly either way.
+- **Nothing external writes files.** That is a deliberate choice here, not a limitation
+  of the tools: every change routes back through the orchestrator that has the full
+  picture. Letting a second agent write into the same working tree is a real option, but
+  it is a decision to make on purpose — not a default.
 - **Benchmark scores measure a pair, not a model.** `code` scores near-ceiling for most
   models *because a test suite runs underneath*. Remove the verifier and the number
   tells you nothing.

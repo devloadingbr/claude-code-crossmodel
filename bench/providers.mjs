@@ -109,13 +109,17 @@ export const MODELS = { ...BUILTIN_MODELS, ...(userCfg.models ?? {}) };
 
 // ------------------------------------------------------------------ transport
 
-function runCli(bin, args, timeoutMs) {
+function runCli(bin, args, timeoutMs, cwd) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     // ⚠️ stdin MUST be 'ignore'. Codex prints "Reading additional input from stdin..."
     // and blocks forever if the pipe stays open — you get only the banner back and it
     // looks like a parse error, not a hang. Cost us an hour; don't undo it.
-    const p = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    //
+    // `cwd` is load-bearing for agentic CLIs: it is the directory they can read. A sweep
+    // ("which files touch X") is just a call with the right cwd — no need to paste code
+    // into the prompt at all.
+    const p = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], ...(cwd ? { cwd } : {}) });
     let out = '', err = '', done = false;
     const timer = setTimeout(() => {
       done = true;
@@ -191,10 +195,12 @@ async function runHttp(provider, { model, prompt }, timeoutMs) {
 /**
  * Call a model by alias. Transport is resolved from the registry.
  * @param {string} alias      key of MODELS (e.g. 'luna', 'opus')
- * @param {string} prompt     a self-contained prompt
- * @param {{timeoutMs?: number, schemaPath?: string}} [opts]
- *        schemaPath is only honoured by providers whose CLI supports it (codex).
- * @returns {Promise<{ok: boolean, ms: number, text: string, error: string|null, model: string}>}
+ * @param {string} prompt     the instruction
+ * @param {{timeoutMs?: number, schemaPath?: string, cwd?: string}} [opts]
+ *        schemaPath — only honoured by providers whose CLI supports it (codex).
+ *        cwd        — directory the model may read. CLI providers only; ignored on http,
+ *                     which has no filesystem at all. This is what makes repo sweeps work.
+ * @returns {Promise<{ok, ms, text, error, model, provider, canReadFiles}>}
  */
 export async function callModel(alias, prompt, opts = {}) {
   const entry = MODELS[alias];
@@ -204,12 +210,29 @@ export async function callModel(alias, prompt, opts = {}) {
 
   const timeoutMs = opts.timeoutMs ?? 240_000;
   const ctx = { model: entry.model, prompt, schemaPath: opts.schemaPath };
+  const isHttp = provider.kind === 'http';
 
-  const r = provider.kind === 'http'
+  // Fail loudly rather than silently ignoring a cwd the transport cannot honour —
+  // a sweep that quietly ran against nothing is worse than one that refused.
+  if (opts.cwd && isHttp) {
+    return {
+      ok: false, ms: 0, text: '',
+      error: `"${alias}" uses the http transport, which has no filesystem access — it cannot sweep ${opts.cwd}. Use a CLI-backed model.`,
+      model: entry.model, provider: entry.provider, canReadFiles: false,
+    };
+  }
+
+  const r = isHttp
     ? await runHttp(provider, ctx, timeoutMs)
-    : await runCli(provider.bin, provider.args(ctx), timeoutMs);
+    : await runCli(provider.bin, provider.args(ctx), timeoutMs, opts.cwd);
 
-  return { ...r, model: entry.model, provider: entry.provider };
+  return { ...r, model: entry.model, provider: entry.provider, canReadFiles: !isHttp };
+}
+
+/** Can this alias read files from a working directory? (agentic CLI vs stateless HTTP) */
+export function canReadFiles(alias) {
+  const entry = MODELS[alias];
+  return entry ? PROVIDERS[entry.provider]?.kind !== 'http' : false;
 }
 
 /** Which aliases are actually usable right now (binary present / key set). */

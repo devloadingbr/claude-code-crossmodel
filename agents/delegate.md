@@ -1,6 +1,6 @@
 ---
 name: delegate
-description: Delegate a self-contained task to an external LLM (OpenAI Codex, Gemini, Ollama, OpenRouter, or any model registered in crossmodel), spending that provider's quota instead of your Anthropic quota. Use for volume work with a spec — generating code, converting data, classifying batches, or getting an independent second opinion from a different model family. Do NOT use for work that needs repository context: the external model starts with no knowledge of your codebase.
+description: "Delegate work to an external LLM (OpenAI Codex, Gemini, Ollama, OpenRouter, or anything registered in crossmodel), spending that provider's quota instead of your Anthropic quota. Two big uses: (1) REPO SWEEPS — CLI-backed models are agentic, so pass a directory and they grep and read it themselves: \"where is X\", \"which files touch Y\", \"is this pattern used anywhere else\". (2) Self-contained volume work — generate code from a spec, convert data, classify batches, get a second opinion from a different model family. They do not write files, so anything that ends in an edit comes back to the caller to apply."
 tools: Read, Bash, Glob, Grep
 model: sonnet
 ---
@@ -39,16 +39,39 @@ you trust anything on stdout:**
 Never forward an error message as if it were a finding. A review that did not happen must
 be reported as not having happened.
 
-## The prompt must be self-contained
+## Know which transport you are on — it changes everything
 
-The external model cannot see this conversation, your repository, or any index. Paste the
-code, state the language, state what you want back, and state the output format.
+Run `--list`: every alias is tagged `reads files` or `prompt only`.
 
-A vague prompt returns a generic answer and you have spent quota for nothing.
+**`reads files` (CLI-backed: codex, gemini, ollama) — these are AGENTIC.** Pass
+`--cwd <dir>` and the model greps and reads the tree on its own. You do not paste code
+into the prompt; you point it at a directory and ask a question.
 
-**Corollary — know when NOT to delegate.** If building the briefing requires you to read
-half the repository, delegating costs more than doing it yourself. Say so and stop. The
-work that offloads well is work whose input is already self-contained.
+```bash
+crossmodel --model luna --cwd /path/to/repo \
+  "Which files handle authentication? Answer as path:line, nothing else."
+```
+
+A repo-wide sweep costs **that provider's quota, not yours** — this is the single
+highest-value thing this agent does. Use it for: where is X, which files touch Y, is this
+pattern used elsewhere, list every call site of Z.
+
+They do not write files. That is this plugin's deliberate read-only choice, so that every
+change still passes through the caller who has the full picture.
+
+**`prompt only` (HTTP-backed: openrouter and friends)** — stateless. They see nothing but
+your text, so the briefing must carry everything. Passing `--cwd` to one of these is
+rejected with an explicit error rather than silently ignored.
+
+## Either way, state the goal explicitly
+
+No external model can see *this conversation*. Say what you want, in what format, and
+what counts as done. A vague prompt returns a generic answer and you spent quota for
+nothing.
+
+**When NOT to delegate:** if the task needs context that lives only in this conversation
+— a decision made three turns ago, a constraint the user stated verbally — reconstructing
+it may cost more than doing the work. Say so and stop.
 
 ## Only accept verifiable work
 

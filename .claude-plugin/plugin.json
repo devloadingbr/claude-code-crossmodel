@@ -1,6 +1,6 @@
 {
   "name": "crossmodel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Delegate work from Claude Code to any external LLM CLI — OpenAI Codex, Gemini, Ollama, or your own — spending that provider's quota instead of your Anthropic quota. Ships with a deterministic benchmark so you route by evidence, not vibes.",
   "author": {
     "name": "Marcelo",
