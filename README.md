@@ -11,7 +11,7 @@ The catch nobody addresses: **how do you know what the cheap model can actually 
 So this ships with a deterministic benchmark. No LLM judges another LLM; a test suite
 decides.
 
-> **Status: v0.2.0, early.** Works, tested end to end, but the API may move. Issues and
+> **Status: v0.3.0, early.** Works, tested end to end, but the API may move. Issues and
 > PRs welcome.
 
 ---
@@ -112,35 +112,44 @@ failure this plugin exists to prevent.
 
 ---
 
-## Design principle: the orchestrator is the only writer
+## Design principle: subagents write and prove, the orchestrator reviews and commits
 
-External models here read. They never write. This is the one design decision the plugin
-will not make configurable, and it is worth explaining because it looks like timidity and
-isn't.
+Writing code is the job. A delegated model that cannot write can't iterate, can't run its
+own tests, and can't finish anything — so `--write` exists and is meant to be used.
 
-**A delegated model has only its own view.** It was handed one question. It doesn't know
-the decision made three turns ago, the constraint the user stated in passing, or the four
-other slices in flight. The orchestrator holds that. When a subagent reports instead of
-writes, its narrow view gets reconciled against the whole before anything lands.
+The checkpoint is not *who touched the file*. It is **what enters history**. While a
+change sits in the working tree it is visible in a diff and cheap to throw away. After a
+commit it is a fact other things get built on. So the boundary sits there:
 
-**A second harness writing into the same tree answers to nobody.** It has its own agent
-loop, its own idea of "done", and its own appetite for adjacent cleanup. Two writers in
-one working directory don't merely risk conflicts — they produce changes that no single
-participant ever reviewed, arriving through a path with no checkpoint in it.
+| Step | Who | Why |
+|---|---|---|
+| Write the code | subagent, any provider | it's the work |
+| Run the gate | subagent | it has to prove it didn't break anything |
+| **Review the whole** | **orchestrator** | only it sees the other slices and the original intent |
+| **Commit** | **orchestrator** | the step that leaves the reach of "undo" |
 
-So the shape is always:
+**Why the orchestrator and not the subagent.** A delegated model holds exactly the view
+it was handed. It doesn't know the decision made three turns ago, the constraint stated
+in passing, or the four other slices in flight. That view is enough to write a correct
+function and nowhere near enough to judge whether it belongs.
+
+**Why external models get an isolated scope.** An external CLI runs *its own* agent loop
+with its own definition of "done" and its own appetite for adjacent cleanup — unlike a
+Claude subagent, which runs under this harness's rules. That's a scoping problem, not a
+reason to forbid writing, so `--write` requires an explicit `--cwd` and confines edits to
+it. Point it at a `git worktree` and two agents can work at once without meeting.
+
+Verified, not assumed: with `--write`, edits inside the directory succeed and edits
+outside are rejected (`patch rejected: writing outside of the project`). The system temp
+dir is writable in both modes. Network is blocked in both modes, so nothing can push,
+deploy, or call a webhook regardless.
 
 ```
-orchestrator  ──asks──▶  external model  ──reports──▶  orchestrator  ──writes──▶  gate
+orchestrator ──asks──▶ model ──writes in an isolated scope + proves──▶ orchestrator reviews ──▶ commits
 ```
 
-The saving is real and unaffected: the *reasoning* — sweeping the repo, drafting the
-implementation, finding the candidates — happens on the external provider's quota. Only
-the apply step comes home, and that step is cheap.
-
-This is also what keeps delegation composable. Because every result routes back through
-one place, you can fan out to five models without five independent actors mutating the
-same tree.
+The saving is untouched: the expensive part — sweeping, reasoning, drafting, testing —
+runs on the external provider's quota. Only review and commit come home.
 
 ---
 
@@ -227,10 +236,14 @@ Built in: `claude`, `codex`, `gemini`, `ollama`, `openrouter`, and a generic
 - **Only CLI-backed models see your repo.** Agentic CLIs read the tree when given
   `--cwd`; HTTP-backed models see nothing but the prompt text. Neither can see the
   *conversation*, so state the goal explicitly either way.
-- **Nothing external writes files.** That is a deliberate choice here, not a limitation
-  of the tools: every change routes back through the orchestrator that has the full
-  picture. Letting a second agent write into the same working tree is a real option, but
-  it is a decision to make on purpose — not a default.
+- **Read-only is the default; `--write` is opt-in and scoped.** Edits are confined to the
+  `--cwd` you name, and nothing external ever commits. Use a `git worktree` when two
+  agents might otherwise share a tree.
+- **Read access is NOT confined to `--cwd`.** A delegated model can read anything your
+  user can — `.env`, `~/.aws/credentials`, shell history. It cannot send them anywhere
+  (network is blocked in every sandbox mode), but it *can* quote them back to you, and
+  that answer lands in your transcript. Don't point a sweep at a tree whose secrets you
+  don't want repeated.
 - **Benchmark scores measure a pair, not a model.** `code` scores near-ceiling for most
   models *because a test suite runs underneath*. Remove the verifier and the number
   tells you nothing.

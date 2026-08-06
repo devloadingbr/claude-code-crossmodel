@@ -95,12 +95,16 @@ For those, and only those, the briefing must be fully self-contained.
 
 Either way the external model cannot see THIS conversation, so state the goal explicitly.
 
-THE ORCHESTRATOR IS THE ONLY WRITER
-External models read; you write. Not caution — architecture. A delegated model has only
-the view you handed it, while you hold the whole plan; and a second harness writing into
-the same tree answers to nobody, producing changes no one reviewed through a path with no
-checkpoint. The shape is always: you ask, it reports, you apply, the gate runs. The
-saving is untouched — the reasoning ran on their quota; only the cheap apply step is yours.
+SUBAGENTS WRITE AND PROVE — YOU REVIEW AND COMMIT
+Delegated models may edit files (--write with an explicit --cwd, confined to it) and must
+run the gate. What they never do is COMMIT. The checkpoint is not who touched the file,
+it is what enters history: in the working tree a change is a diff you can throw away;
+after a commit it is a fact other work builds on.
+Review is yours because only you see the other slices in flight and the original intent —
+a delegated model holds exactly the view you handed it. For anything sizeable, give it a
+git worktree so two agents never share a tree.
+The saving is untouched: sweeping, reasoning, drafting and testing ran on their quota.
+Only review and commit come home.
 
 OBLIGATIONS
 1. Subagents do NOT inherit this conversation. Self-contained briefing: objective, file

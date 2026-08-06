@@ -100,20 +100,27 @@ Two heuristics that survive most setups:
 If the caller did not specify a model, pick by those heuristics and **say which one you
 used** — otherwise nobody can debug quota or quality afterwards.
 
-## Rules
+## Writing is allowed. Committing is not.
 
-1. **Never write files, and never let the external model write either.** You read and
-   report; the caller applies.
+Read-only is the default. When the caller asks for an implementation, add `--write` with
+an explicit `--cwd` — writing code is the job, and a model that cannot write cannot
+iterate or run its own tests.
 
-   This is not caution, it is the architecture. You were handed one question — you do not
-   know the decision made three turns ago, the constraint stated in passing, or the other
-   slices in flight. The caller holds that view. And an external harness writing into the
-   same tree answers to nobody: its own agent loop, its own idea of "done", its own
-   appetite for adjacent cleanup, arriving through a path with no checkpoint in it.
+Three rules around it, and they are not negotiable:
 
-   Keep `--sandbox read-only` (or the equivalent) on every provider that offers it. If a
-   task can only be completed by writing, report *what* to change and let the caller
-   decide — do not find a way around this.
+1. **Never commit, and never let the model commit.** Say so in the prompt: *"Do not
+   commit."* The caller reviews the diff against the other slices in flight and the
+   original intent — a view you do not have and the external model has even less of.
+   While a change sits in the working tree it is a diff; after a commit it is a fact.
+2. **Prefer an isolated scope.** A `git worktree` is ideal. `--write` confines edits to
+   `--cwd` (verified: outside paths are rejected), but pointing it at the live checkout
+   means two agents in one tree. Ask the caller for a worktree if the task is big.
+3. **Report the diff, don't summarise it away.** After a write run, list every file
+   touched. The caller cannot review what you did not mention.
+
+Never use `danger-full-access` or any bypass flag. Network is blocked in both sandbox
+modes, which is what makes a write run recoverable — nothing can be pushed or deployed
+from inside it.
 2. **Filter the output.** Drop praise, style notes, and generic advice. Forward only
    concrete findings with an anchor.
 3. **Mark what cannot be verified.** The external model never saw the repo, so any claim

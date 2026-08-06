@@ -35,8 +35,13 @@ export const BUILTIN_PROVIDERS = {
   codex: {
     kind: 'cli',
     bin: 'codex',
-    args: ({ model, prompt, schemaPath }) => {
-      const a = ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '-m', model];
+    // `write` opts into workspace-write. Verified: writes land inside the workspace and
+    // are rejected outside it ("patch rejected: writing outside of the project") — the
+    // documented exception is the system temp dir, which is writable in both modes.
+    // Never expose danger-full-access; that removes the only boundary here.
+    args: ({ model, prompt, schemaPath, write }) => {
+      const a = ['exec', '--sandbox', write ? 'workspace-write' : 'read-only',
+                 '--skip-git-repo-check', '-m', model];
       if (schemaPath) a.push('--output-schema', schemaPath);
       a.push(prompt);
       return a;
@@ -209,7 +214,7 @@ export async function callModel(alias, prompt, opts = {}) {
   if (!provider) throw new Error(`model "${alias}" points at unknown provider "${entry.provider}"`);
 
   const timeoutMs = opts.timeoutMs ?? 240_000;
-  const ctx = { model: entry.model, prompt, schemaPath: opts.schemaPath };
+  const ctx = { model: entry.model, prompt, schemaPath: opts.schemaPath, write: opts.write };
   const isHttp = provider.kind === 'http';
 
   // Fail loudly rather than silently ignoring a cwd the transport cannot honour —
@@ -218,6 +223,23 @@ export async function callModel(alias, prompt, opts = {}) {
     return {
       ok: false, ms: 0, text: '',
       error: `"${alias}" uses the http transport, which has no filesystem access — it cannot sweep ${opts.cwd}. Use a CLI-backed model.`,
+      model: entry.model, provider: entry.provider, canReadFiles: false,
+    };
+  }
+
+  // Writing without an explicit directory would let the agent edit wherever the parent
+  // process happens to be standing. The scope has to be stated, never inherited.
+  if (opts.write && !opts.cwd) {
+    return {
+      ok: false, ms: 0, text: '',
+      error: 'write mode requires an explicit cwd — refusing to inherit the caller\'s directory as the writable scope.',
+      model: entry.model, provider: entry.provider, canReadFiles: !isHttp,
+    };
+  }
+  if (opts.write && isHttp) {
+    return {
+      ok: false, ms: 0, text: '',
+      error: `"${alias}" uses the http transport and has no filesystem — it cannot write.`,
       model: entry.model, provider: entry.provider, canReadFiles: false,
     };
   }

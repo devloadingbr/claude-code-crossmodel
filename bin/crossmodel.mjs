@@ -40,6 +40,10 @@ Options:
                      agentic — give them a repo and they will grep and read it
                      themselves, so you do not have to paste code into the prompt.
                      Rejected for http-backed models, which have no filesystem.
+  --write            let the model edit files inside --cwd (required with it). Writes
+                     are confined to that directory; anything outside is rejected.
+                     Off by default. The model still cannot commit, and cannot reach
+                     the network in either mode.
   --file <path>      append a file's contents to the prompt
   --timeout <ms>     default 240000
   --schema <path>    JSON Schema for structured output (only providers whose CLI
@@ -50,6 +54,13 @@ Options:
 Sweep example — costs the provider's quota, not yours:
   crossmodel --model luna --cwd ~/myrepo \
     "Which files handle authentication? Answer as a list of path:line."
+
+Write example — point it at an isolated worktree, review the diff yourself, commit yourself:
+  git worktree add /tmp/wt-feature -b feature
+  crossmodel --model luna --cwd /tmp/wt-feature --write \
+    "Implement the spec in SPEC.md. Run the tests. Do not commit."
+  git -C /tmp/wt-feature diff        # you review
+  git -C /tmp/wt-feature commit ...  # you commit
 
 Aliases are defined in bench/providers.mjs and can be extended or overridden with a
 crossmodel.config.json — see crossmodel.config.example.json.`);
@@ -105,10 +116,16 @@ if (!prompt) {
 }
 
 const cwd = flag('cwd');
+const write = has('write');
+if (write && !cwd) {
+  console.error('crossmodel: --write requires --cwd. Refusing to make the caller\'s current directory writable by accident.');
+  process.exit(1);
+}
 const r = await callModel(alias, prompt, {
   timeoutMs: Number(flag('timeout', '240000')),
   schemaPath: flag('schema') ?? undefined,
   cwd: cwd ?? undefined,
+  write,
 });
 
 if (!r.ok) {
@@ -117,6 +134,8 @@ if (!r.ok) {
 }
 
 if (!has('quiet')) {
-  console.error(`crossmodel: ${alias} → ${r.provider}/${r.model}, ${r.ms}ms${cwd ? `, swept ${cwd}` : ''}`);
+  const scope = cwd ? `, ${write ? 'WROTE IN' : 'swept'} ${cwd}` : '';
+  console.error(`crossmodel: ${alias} → ${r.provider}/${r.model}, ${r.ms}ms${scope}`);
+  if (write) console.error('crossmodel: review the diff and commit yourself — the model did neither.');
 }
 process.stdout.write(r.text);
