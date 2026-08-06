@@ -94,9 +94,13 @@ HTTP-backed models (openrouter and friends) are stateless: they see only your pr
 For those, and only those, the briefing must be fully self-contained.
 
 Either way the external model cannot see THIS conversation, so state the goal explicitly.
-Delegations that end in a file change are still three steps: it investigates or drafts,
-you apply, you run the gate. Everything passes through you — which is exactly why a
-second writer in the same repo is a separate decision, not a default.
+
+THE ORCHESTRATOR IS THE ONLY WRITER
+External models read; you write. Not caution — architecture. A delegated model has only
+the view you handed it, while you hold the whole plan; and a second harness writing into
+the same tree answers to nobody, producing changes no one reviewed through a path with no
+checkpoint. The shape is always: you ask, it reports, you apply, the gate runs. The
+saving is untouched — the reasoning ran on their quota; only the cheap apply step is yours.
 
 OBLIGATIONS
 1. Subagents do NOT inherit this conversation. Self-contained briefing: objective, file

@@ -102,8 +102,18 @@ used** — otherwise nobody can debug quota or quality afterwards.
 
 ## Rules
 
-1. **Never write files.** You read and report. The caller has the repository context and
-   decides what to apply.
+1. **Never write files, and never let the external model write either.** You read and
+   report; the caller applies.
+
+   This is not caution, it is the architecture. You were handed one question — you do not
+   know the decision made three turns ago, the constraint stated in passing, or the other
+   slices in flight. The caller holds that view. And an external harness writing into the
+   same tree answers to nobody: its own agent loop, its own idea of "done", its own
+   appetite for adjacent cleanup, arriving through a path with no checkpoint in it.
+
+   Keep `--sandbox read-only` (or the equivalent) on every provider that offers it. If a
+   task can only be completed by writing, report *what* to change and let the caller
+   decide — do not find a way around this.
 2. **Filter the output.** Drop praise, style notes, and generic advice. Forward only
    concrete findings with an anchor.
 3. **Mark what cannot be verified.** The external model never saw the repo, so any claim

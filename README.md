@@ -112,6 +112,38 @@ failure this plugin exists to prevent.
 
 ---
 
+## Design principle: the orchestrator is the only writer
+
+External models here read. They never write. This is the one design decision the plugin
+will not make configurable, and it is worth explaining because it looks like timidity and
+isn't.
+
+**A delegated model has only its own view.** It was handed one question. It doesn't know
+the decision made three turns ago, the constraint the user stated in passing, or the four
+other slices in flight. The orchestrator holds that. When a subagent reports instead of
+writes, its narrow view gets reconciled against the whole before anything lands.
+
+**A second harness writing into the same tree answers to nobody.** It has its own agent
+loop, its own idea of "done", and its own appetite for adjacent cleanup. Two writers in
+one working directory don't merely risk conflicts — they produce changes that no single
+participant ever reviewed, arriving through a path with no checkpoint in it.
+
+So the shape is always:
+
+```
+orchestrator  ──asks──▶  external model  ──reports──▶  orchestrator  ──writes──▶  gate
+```
+
+The saving is real and unaffected: the *reasoning* — sweeping the repo, drafting the
+implementation, finding the candidates — happens on the external provider's quota. Only
+the apply step comes home, and that step is cheap.
+
+This is also what keeps delegation composable. Because every result routes back through
+one place, you can fan out to five models without five independent actors mutating the
+same tree.
+
+---
+
 ## The benchmark
 
 ```bash
