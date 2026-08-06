@@ -292,10 +292,23 @@ export async function callModel(alias, prompt, opts = {}) {
   if (opts.resume && provider.supportsResume !== true) {
     return fail(entry, `provider "${entry.provider}" cannot resume a session in crossmodel; drop --resume.`);
   }
-  // Network is a workspace-write-scoped setting in codex. Asking for it read-only would
-  // produce a flag that quietly does nothing.
+  // Network is a workspace-write-scoped setting in codex, so "read-only WITH network" is
+  // not expressible — asking for it would produce a flag that quietly does nothing.
+  //
+  // 🔴 And the obvious escape hatch does not work. Measured 2026-08-06: running
+  // workspace-write with `sandbox_workspace_write.writable_roots` pointed at a scratch
+  // directory did NOT confine anything — the agent overwrote a file in the cwd anyway.
+  // So do not "fix" this by narrowing writable_roots and granting network; that would
+  // hand out repo write access while the flag name promises otherwise. The safe pattern
+  // is the one in the message: copy what the agent must read into a throwaway directory
+  // and point --cwd there, so the only thing it can damage is the copy.
   if (opts.network && !opts.write) {
-    return fail(entry, '--network only applies with --write (the sandbox toggle it maps to is workspace-write-scoped).');
+    return fail(
+      entry,
+      '--network requires --write (codex scopes the toggle to its workspace-write sandbox).\n' +
+        '  For a read-only sweep that still needs the internet, stage what it must read in a\n' +
+        '  throwaway directory and point --cwd there — the original tree is then untouchable.',
+    );
   }
 
   if (opts.schemaPath && provider.supportsSchema === false) {

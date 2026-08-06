@@ -218,12 +218,21 @@ crossmodel --model luna --worktree /tmp/wt-feature --write --network \
 
 - `--network` requires `--write` (the toggle it maps to is workspace-write-scoped) and
   stays off unless asked. Turn it on when the agent must run the project's real gate.
+  For a read-only sweep that still needs the internet, copy what it must read into a
+  throwaway directory and point `--cwd` there. 🔴 **Do not instead narrow
+  `sandbox_workspace_write.writable_roots` and grant network** — measured 2026-08-06, that
+  setting did *not* confine anything: the agent overwrote a file in the cwd regardless.
+  It looks like a safety boundary and isn't one.
 - `--effort <level>` picks reasoning effort in the provider's own vocabulary (codex:
   `minimal|low|medium|high|xhigh`). A provider without the control **errors** instead of
   silently ignoring it — believing a run reasoned harder than it did is worse than an error.
-- `--worktree <dir>` creates (or reuses) an isolated git worktree and uses it as `--cwd`.
-  The README used to *recommend* this; now it is one flag. The worktree is left behind
-  deliberately — reviewing that diff is the point.
+- `--worktree <dir>` creates (or reuses) an isolated git worktree and uses it as `--cwd`,
+  **symlinking `node_modules` in**. That last part is not a convenience: a fresh worktree
+  has no installed dependencies, so the agent cannot run the very tests it was asked to
+  prove its work with — an isolation flag that blocks verification is a trap, not
+  isolation. Add `--link a,b` for the gitignored files a checkout lacks and the tests
+  need, like a local `.env`. The worktree is left behind deliberately — reviewing that
+  diff is the point.
 - `--resume <id|last>` continues a session that died instead of starting cold. The context
   it already paid for survives, and re-reading the repo is the expensive part.
 
@@ -294,6 +303,19 @@ lets callers keep doing `$(crossmodel ...)` and piping into other tools. In fact
 got *cleaner*: reading the event stream means the answer is the model's actual message,
 with the provider's banner no longer glued to the front of it.
 
+The first line is a header — model, effort, sandbox, network — because with `--json` the
+provider's own banner disappears, and settings you cannot see are settings you cannot
+trust. Proving that `--effort xhigh` had actually taken once meant reading codex's session
+transcript by hand.
+
+Long silences get reported too. An agent alternates between bursts of tool calls and quiet
+stretches where it reasons and writes, and a quiet stretch is indistinguishable from a
+hang — that confusion happened here, on a run that was working fine. After a minute
+without events you get `… working, 90s since the last event`.
+
+- `--log <file>` — write the progress lines *and* the answer to a file as well. Use this
+  instead of redirecting stderr, which silences the live view. The obvious fix for that
+  (`2>&1 | tee`) is easy to forget; forgetting it once already cost a run's visibility.
 - `--no-stream` — turn the stream off entirely and go back to waiting in silence.
 - `--quiet` — silence the narration but **keep** the stream, because it is also what
   strips the banner. Tying the two together would make `--quiet` return a dirtier stdout
@@ -429,3 +451,17 @@ MIT — see [LICENSE](LICENSE).
 
 Not affiliated with Anthropic or OpenAI. Uses each provider's official CLI under your
 own account and terms.
+
+### Exit codes
+
+| code | meaning |
+|---|---|
+| 0 | success — the answer is on stdout |
+| 1 | usage error (unknown alias, missing prompt, contradictory flags) |
+| 2 | the call failed (provider unavailable, timeout, non-zero exit) |
+| 3 | a `--write` run succeeded but **changed no file** |
+
+Code 3 exists because success and no-op were indistinguishable, and that is dangerous in
+exactly the case you most want to notice. A delegated phase here stopped because the schema
+it needed did not exist — the correct call, honestly reported — and returned 0. Anything
+automating on top of that reads "done".

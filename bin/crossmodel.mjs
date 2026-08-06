@@ -16,7 +16,7 @@
 // Exit code 2 matters: an error must never be mistaken for an answer. Anything
 // consuming this must check the exit code before trusting stdout.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { callModel, MODELS, availableModels } from '../bench/providers.mjs';
@@ -168,8 +168,15 @@ Options:
                      Off by default. The model still cannot commit, and has no network
                      unless you also pass --network.
   --worktree <dir>   create (or reuse) an isolated git worktree and use it as --cwd.
-                     Requires --write. The worktree is left behind for you to review and
-                     remove — that review is the point.
+                     Requires --write. node_modules is symlinked in automatically, because
+                     a worktree that cannot run the project's tests cannot verify its own
+                     work. The worktree is left behind for you to review and remove —
+                     that review is the point.
+  --link a,b         extra paths to symlink into the worktree, comma separated. For the
+                     gitignored files a fresh checkout lacks and the tests need, such as
+                     a local .env.
+  --log <file>       also write the progress lines and the answer to a file. Use this
+                     instead of redirecting stderr, which silences the live view.
   --effort <level>   reasoning effort, provider vocabulary (codex: minimal|low|medium|
                      high|xhigh). Omit for the provider default.
   --network          let the agent reach the network. OFF by default and requires --write.
@@ -233,7 +240,7 @@ if (!MODELS[alias]) {
 }
 
 // The prompt is the first bare argument (anything not a flag or a flag's value).
-const flagsTakingValue = new Set(['model', 'file', 'timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree']);
+const flagsTakingValue = new Set(['model', 'file', 'timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree', 'log', 'link']);
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -323,6 +330,33 @@ if (worktree) {
     console.error(`crossmodel: reusing existing worktree ${dir}`);
   }
   cwd = dir;
+
+  // ── what git does NOT bring, and without which the worktree is decoration ──
+  // A fresh worktree has no node_modules and no gitignored env files, so the agent
+  // cannot run the very test suite it was asked to prove its work with. Measured
+  // here: the first --worktree run was useless for exactly this reason, and the
+  // manual fix (symlink node_modules, symlink scripts/dev/.env) had to be done by
+  // hand anyway. An isolation flag that blocks verification isn't isolation, it's
+  // a trap — so linking is the default, not an option.
+  const source = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  const repoRoot = source.status === 0 ? source.stdout.trim() : process.cwd();
+  const extra = (flag('link') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  for (const rel of ['node_modules', ...extra]) {
+    const from = path.resolve(repoRoot, rel);
+    const to = path.join(dir, rel);
+    if (!existsSync(from) || existsSync(to)) continue;
+    try {
+      // A symlink, not a copy: node_modules is gigabytes and a copy would make the
+      // flag too slow to reach for. Shared state is acceptable here because these
+      // are installed artefacts and config, not the code under edit.
+      symlinkSync(from, to);
+      if (!has('quiet')) console.error(`crossmodel: linked ${rel} into the worktree`);
+    } catch (e) {
+      // Say it, don't swallow it — a missing link shows up later as a confusing
+      // "cannot find module" from inside the agent, far from the cause.
+      console.error(`crossmodel: could not link ${rel} (${e.message}) — the agent may fail to run the project's tests.`);
+    }
+  }
 }
 
 if (write && !cwd) {
@@ -346,6 +380,24 @@ const resume = flag('resume');
 const streaming = !has('no-stream');
 const reportProgress = streaming && !has('quiet');
 const t0 = Date.now();
+
+// `--log` writes everything the terminal shows to a file as well. Exists because the
+// obvious workaround — redirecting stderr into a file — silences the live view, and the
+// obvious fix for THAT (`2>&1 | tee`) is easy to forget: doing it wrong once already cost
+// a whole run's visibility here.
+const logPath = flag('log');
+if (logPath) {
+  try {
+    writeFileSync(logPath, '');
+  } catch (e) {
+    console.error(`crossmodel: cannot write --log ${logPath}: ${e.message}`);
+    process.exit(1);
+  }
+}
+const say = (line) => {
+  if (reportProgress) console.error(line);
+  if (logPath) { try { appendFileSync(logPath, `${line}\n`); } catch { /* log is best-effort */ } };
+};
 const since = () => `${String(Math.round((Date.now() - t0) / 1000)).padStart(4)}s`;
 const clip = (s, n = 140) => {
   const one = String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -357,15 +409,40 @@ const MARK = {
   edit: '✎', search: '?', message: '>', error: '!', done: '=',
 };
 
+// Heartbeat. An agent alternates between bursts of tool calls and long silent stretches
+// where it is reasoning and writing — and the silent stretch is indistinguishable from a
+// hang. That exact confusion happened here ("o luna parou?") on a run that was working
+// fine. So silence itself gets reported.
+const HEARTBEAT_MS = 60_000;
+let lastEventAt = Date.now();
+let filesWritten = 0;
+const heartbeat = setInterval(() => {
+  const quietFor = Date.now() - lastEventAt;
+  if (quietFor < HEARTBEAT_MS) return;
+  say(`  ${since()} … working, ${Math.round(quietFor / 1000)}s since the last event`);
+}, HEARTBEAT_MS);
+heartbeat.unref?.(); // never keep the process alive just to tick
+
 const onEvent = streaming
   ? (e) => {
-      if (!reportProgress) return; // stream still consumed — just not narrated
-      if (e.kind === 'start') { console.error(`  ${since()} · session ${e.id ?? '?'}`); return; }
+      lastEventAt = Date.now();
+      if (e.kind === 'edit') filesWritten++;
+      if (e.kind === 'start') { say(`  ${since()} · session ${e.id ?? '?'}`); return; }
       const body = clip(e.text, e.kind === 'message' ? 200 : 140);
       if (!body) return;
-      console.error(`  ${since()} ${MARK[e.kind] ?? '·'} ${body}`);
+      say(`  ${since()} ${MARK[e.kind] ?? '·'} ${body}`);
     }
   : undefined;
+
+// One header line, before anything runs. With `--json` the provider's own banner
+// disappears, and with it the only visible confirmation of WHICH settings are in force —
+// proving that `--effort xhigh` had actually taken meant digging through codex's session
+// transcript by hand. Settings you cannot see are settings you cannot trust.
+if (reportProgress || logPath) {
+  const bits = [alias, effort ?? 'default effort', write ? 'write' : 'read-only', `network: ${network ? 'on' : 'off'}`];
+  if (resume) bits.push(`resume: ${resume}`);
+  say(`crossmodel: ${bits.join(' · ')} in ${cwd ?? process.cwd()}`);
+}
 
 const r = await callModel(alias, prompt, {
   timeoutMs,
@@ -377,6 +454,8 @@ const r = await callModel(alias, prompt, {
   resume: resume ?? undefined,
   onEvent,
 });
+
+clearInterval(heartbeat);
 
 if (!r.ok) {
   console.error(`crossmodel: call to ${alias} (${r.provider}/${r.model}) failed after ${r.ms}ms: ${r.error}`);
@@ -400,4 +479,15 @@ if (!has('quiet')) {
   }
   if (write) console.error('crossmodel: review the diff and commit yourself — the model did neither.');
 }
+if (logPath) { try { appendFileSync(logPath, `\n${r.text}\n`); } catch { /* best-effort */ } }
 process.stdout.write(r.text);
+
+// ── exit 3: it ran, it succeeded, it changed nothing ─────────────────────────────────
+// A `--write` run that touches no file is a legitimate outcome — the agent may have found
+// a blocker and correctly refused to fake progress. That happened here: a phase stopped
+// because the schema it needed did not exist, and returned exit 0. Anything automating on
+// top of this would have read that as "done". Success and no-op must not share a code.
+if (write && r.streamed && filesWritten === 0) {
+  console.error('crossmodel: the run succeeded but wrote NO files — read the answer before treating this as done.');
+  process.exit(3);
+}
