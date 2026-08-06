@@ -21,8 +21,5 @@
     "benchmark",
     "quota",
     "subagent"
-  ],
-  "hooks": "./hooks/hooks.json",
-  "skills": "./skills/",
-  "agents": "./agents/"
+  ]
 }
