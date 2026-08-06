@@ -114,10 +114,42 @@ turn. Without the trigger it outputs nothing and costs nothing.
 The `#` is required on purpose — a bare `route` collides with everyday vocabulary
 ("fix the `/api` route") and the hook would fire on half your prompts.
 
-The policy is data. Copy `routing.example.json` to `routing.json` and edit it; the hook
-never needs changing. If the file is malformed it says so loudly rather than quietly
-falling back to defaults — silently reverting to an unmeasured policy is exactly the
-failure this plugin exists to prevent.
+The policy is data. Copy `routing.example.json` to `~/.claude/crossmodel/routing.json`
+and edit it; the hook never needs changing. If the file is malformed it says so loudly
+rather than quietly falling back to defaults — silently reverting to an unmeasured policy
+is exactly the failure this plugin exists to prevent.
+
+Put it in `~/.claude/crossmodel/`, not in the plugin directory: an installed plugin lives
+under a *versioned* path, so an update creates a new directory and anything you wrote into
+the old one is gone.
+
+### 4. Saver mode — delegate by default, on a deadline
+
+`#route` is opt-in per turn, which is right most of the time and wrong exactly when it
+matters: the week your quota is nearly spent, you forget the trigger on the turns you
+most needed it.
+
+```bash
+crossmodel mode on --until sunday --prefer luna
+crossmodel mode status
+crossmodel mode off
+```
+
+While it is on, **every** turn carries a short standing reminder — delegate by default,
+justify in one line when you don't — instead of waiting for a trigger. It costs roughly
+200 tokens a turn, which one avoided file-read pays back.
+
+`--until` takes `6h`, `2d`, a weekday name, or an ISO date, and the mode **expires on its
+own** and announces that it did. A quota-saving measure you can leave on by accident is
+one that stops matching reality without telling you.
+
+Two things it deliberately keeps at home: final review and the commit. Saver mode changes
+who does the work, never who approves it.
+
+One counterintuitive rule it enforces: **call the CLI straight from Bash rather than
+through the `delegate` subagent.** That subagent is itself a Claude model — using it to
+save Anthropic quota spends Anthropic quota. It earns its cost when the output is large or
+the batch is long, and not before.
 
 ---
 

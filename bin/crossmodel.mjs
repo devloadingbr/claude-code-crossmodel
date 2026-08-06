@@ -18,6 +18,7 @@
 
 import { readFileSync } from 'node:fs';
 import { callModel, MODELS, availableModels } from '../bench/providers.mjs';
+import { readMode, writeMode, clearMode, parseUntil, describeUntil, MODE_PATH } from '../lib/mode.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -26,6 +27,64 @@ const flag = (name, fallback = null) => {
 };
 const has = (name) => argv.includes(`--${name}`);
 
+// ── `crossmodel mode` ────────────────────────────────────────────────────────────────
+// Saver mode is a standing bias, not a one-off flag: while it is on, the routing hook
+// injects a short "delegate by default" reminder into every turn instead of waiting for
+// the #route trigger. Deadline-bounded so it cannot be left on by accident.
+if (argv[0] === 'mode') {
+  const sub = argv[1] ?? 'status';
+  const now = new Date();
+
+  if (sub === 'status') {
+    const m = readMode(now);
+    if (m.error) { console.error(`crossmodel: ${m.error}`); process.exit(2); }
+    if (m.expired) { clearMode(); console.log(`saver mode: OFF (expired ${new Date(m.until).toLocaleString()})`); process.exit(0); }
+    if (!m.active) { console.log('saver mode: OFF'); process.exit(0); }
+    console.log(`saver mode: ON — ${describeUntil(m.until, now)}${m.model ? `, preferring "${m.model}"` : ''}`);
+    console.log(`state: ${MODE_PATH}`);
+    process.exit(0);
+  }
+
+  if (sub === 'off') {
+    clearMode();
+    console.log('saver mode: OFF');
+    process.exit(0);
+  }
+
+  if (sub === 'on') {
+    const untilRaw = flag('until');
+    let until = null;
+    if (untilRaw) {
+      const d = parseUntil(untilRaw, now);
+      // An unparseable deadline is an error, never "no deadline" — a typo must not
+      // silently pin saver mode on forever.
+      if (!d) {
+        console.error(`crossmodel: cannot parse --until "${untilRaw}". Try 6h, 2d, sunday, or an ISO date.`);
+        process.exit(1);
+      }
+      if (d.getTime() <= now.getTime()) {
+        console.error(`crossmodel: --until "${untilRaw}" resolves to the past (${d.toLocaleString()}).`);
+        process.exit(1);
+      }
+      until = d.toISOString();
+    }
+
+    const model = flag('prefer');
+    if (model && !MODELS[model]) {
+      console.error(`crossmodel: unknown model "${model}". Known: ${Object.keys(MODELS).join(', ')}`);
+      process.exit(1);
+    }
+
+    writeMode({ active: true, until, model: model ?? null, startedAt: now.toISOString() });
+    console.log(`saver mode: ON — ${describeUntil(until, now)}${model ? `, preferring "${model}"` : ''}`);
+    console.log('Every turn now carries a short "delegate by default" reminder. Turn it off with: crossmodel mode off');
+    process.exit(0);
+  }
+
+  console.error(`crossmodel: unknown "mode" subcommand "${sub}". Use: on | off | status`);
+  process.exit(1);
+}
+
 if (has('help') || (!argv.length)) {
   console.log(`crossmodel — call any registered model
 
@@ -33,6 +92,16 @@ if (has('help') || (!argv.length)) {
   crossmodel --model <alias> --file <path> "<instruction>"
   crossmodel --model <alias> --cwd <dir> "<sweep instruction>"
   crossmodel --list
+  crossmodel mode on|off|status
+
+Saver mode — for when your Anthropic quota is nearly spent:
+  crossmodel mode on --until sunday --prefer luna
+  crossmodel mode status
+  crossmodel mode off
+
+  While it is on, every turn carries a short "delegate by default" reminder instead of
+  waiting for the #route trigger. --until accepts 6h, 2d, a weekday, or an ISO date, and
+  the mode expires on its own so it cannot be left on by accident.
 
 Options:
   --model <alias>    which model (see --list)

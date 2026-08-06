@@ -13,6 +13,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { readMode, clearMode, describeUntil, USER_ROUTING_PATH } from '../lib/mode.mjs';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 
@@ -44,6 +45,10 @@ const BUILT_IN = {
 function loadPolicy() {
   const candidates = [
     process.env.CROSSMODEL_ROUTING,
+    // $HOME first: a plugin update installs into a new versioned directory, so a
+    // routing.json written into the plugin root would be silently discarded and the
+    // user would drop back to unmeasured defaults without being told.
+    USER_ROUTING_PATH,
     path.join(ROOT, 'routing.json'),
   ].filter(Boolean);
   for (const p of candidates) {
@@ -113,6 +118,34 @@ OBLIGATIONS
 </crossmodel_routing>`;
 }
 
+// Saver mode injects on EVERY turn, so it has to stay small — this is a standing bias,
+// not a briefing. The full policy is still one `#route` away.
+function renderSaver(mode, now) {
+  const pref = mode.model ? mode.model : 'the cheapest model that clears the bar';
+  return `<crossmodel_saver>
+QUOTA SAVER ACTIVE — ${describeUntil(mode.until, now)}.
+Anthropic quota is nearly spent. The external provider's is not. Spend theirs.
+
+Default to delegating. If a delegatable step is NOT delegated, justify it in one line.
+
+Delegate by default (prefer ${pref}):
+- "where is X" / "which files touch Y" / "does this pattern exist" — sweep with --cwd,
+  do not Read and Grep your way there yourself
+- read a lot to conclude a little — sweep, and ask several questions in ONE sweep
+- code from a spec a test can check — --write in an isolated dir, then review the diff
+- bulk conversion, classification into a closed list, independent second opinion
+
+Call the CLI STRAIGHT FROM BASH:
+  crossmodel --model <alias> --cwd <dir> "<self-contained question>"
+The \`delegate\` subagent is itself a Claude model and spends the quota you are saving.
+Reach for it only when the output is large or the batch is long.
+
+Still yours, and not negotiable: final review, decisions expensive to reverse, and the
+commit. Never delegate what no verifier can check — no test, no typecheck, no closed
+list means move it back up a tier.
+</crossmodel_saver>`;
+}
+
 let buf = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (c) => { buf += c; });
@@ -120,18 +153,48 @@ process.stdin.on('end', () => {
   let prompt = '';
   try { prompt = JSON.parse(buf || '{}').prompt || ''; } catch { /* malformed payload: do nothing */ }
 
+  const now = new Date();
+  const mode = readMode(now);
   const policy = loadPolicy();
   const trigger = policy.trigger || DEFAULT_TRIGGER;
   // Escape the trigger so a user-supplied value can't inject regex syntax.
   const escaped = trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (!new RegExp(`(^|\\s)${escaped}\\b`, 'i').test(prompt)) process.exit(0);
+  const triggered = new RegExp(`(^|\\s)${escaped}\\b`, 'i').test(prompt);
+
+  // Expiry is announced, not silent: the user turned this on to protect a budget and has
+  // to know the protection ended.
+  if (mode.expired) {
+    clearMode();
+    process.stdout.write(JSON.stringify({
+      systemMessage: `crossmodel: saver mode expired (${new Date(mode.until).toLocaleString()}) — back to normal routing.`,
+      ...(triggered && {
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: render(policy) },
+      }),
+    }));
+    process.exit(0);
+  }
+
+  if (mode.error) {
+    process.stdout.write(JSON.stringify({
+      systemMessage: `🔴 crossmodel: ${mode.error} — saver mode is NOT active. Fix the file or run \`crossmodel mode off\`.`,
+    }));
+    process.exit(0);
+  }
+
+  if (!triggered && !mode.active) process.exit(0);
+
+  // #route asked for the full policy; saver mode alone gets the compact reminder.
+  const context = triggered
+    ? (mode.active ? `${renderSaver(mode, now)}\n\n${render(policy)}` : render(policy))
+    : renderSaver(mode, now);
+
+  const note = triggered
+    ? `${trigger} — routing policy injected${policy.measured ? '' : ' (unmeasured defaults)'}`
+    : null;
 
   process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'UserPromptSubmit',
-      additionalContext: render(policy),
-    },
-    systemMessage: `${trigger} — routing policy injected${policy.measured ? '' : ' (unmeasured defaults)'}`,
+    hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: context },
+    ...(note && { systemMessage: note }),
   }));
   process.exit(0);
 });
