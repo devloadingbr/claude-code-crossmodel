@@ -1,6 +1,6 @@
 {
   "name": "crossmodel",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Delegate work from Claude Code to an external agentic CLI — OpenAI Codex, Gemini, Ollama — spending that provider's quota instead of your Anthropic quota. They sweep your repo and write code in an isolated scope; you review and commit. Includes a deterministic benchmark so you route by evidence.",
   "author": {
     "name": "Marcelo",

@@ -182,8 +182,11 @@ it. Point it at a `git worktree` and two agents can work at once without meeting
 
 Verified, not assumed: with `--write`, edits inside the directory succeed and edits
 outside are rejected (`patch rejected: writing outside of the project`). The system temp
-dir is writable in both modes. Network is blocked in both modes, so nothing can push,
-deploy, or call a webhook regardless.
+dir is writable in both modes. Network is blocked by default in both modes, so nothing can
+push, deploy, or call a webhook — and it stays that way unless you pass `--network`, which
+requires `--write` and exists so an agent can run a test suite that talks to a local
+service. Opening it is a real widening of scope: with network on, "cannot call a webhook"
+no longer holds. Grant it when you want the agent's work verified, not by default.
 
 ```
 orchestrator ──asks──▶ model ──writes in an isolated scope + proves──▶ orchestrator reviews ──▶ commits

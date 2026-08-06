@@ -165,8 +165,8 @@ Options:
                      not have to paste code into the prompt.
   --write            let the model edit files inside --cwd (required with it). Writes
                      are confined to that directory; anything outside is rejected.
-                     Off by default. The model still cannot commit, and cannot reach
-                     the network in either mode.
+                     Off by default. The model still cannot commit, and has no network
+                     unless you also pass --network.
   --worktree <dir>   create (or reuse) an isolated git worktree and use it as --cwd.
                      Requires --write. The worktree is left behind for you to review and
                      remove — that review is the point.
