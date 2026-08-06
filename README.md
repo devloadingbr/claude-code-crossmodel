@@ -14,7 +14,7 @@ The catch nobody addresses: **how do you know what the cheap model can actually 
 So this ships with a deterministic benchmark. No LLM judges another LLM; a test suite
 decides.
 
-> **Status: v0.5.0, early.** Works, tested end to end, but the API may move. Issues and
+> **Status: v0.7.0, early.** Works, tested end to end, but the API may move. Issues and
 > PRs welcome.
 
 ---
@@ -61,7 +61,8 @@ crossmodel --list
 
 The alias hides which binary it is, so nothing downstream cares.
 
-**Exit codes are load-bearing:** `0` success, `1` usage error, `2` the call failed.
+**Exit codes are load-bearing:** `0` success, `1` usage error, `2` the call failed, `3` a
+`--write` run that changed nothing.
 A failed call still produces text, and text looks like an answer — anything consuming
 this must check the exit code first.
 
