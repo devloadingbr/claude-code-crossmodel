@@ -42,16 +42,95 @@ export const BUILTIN_PROVIDERS = {
     bin: 'codex',
     supportsSchema: true,
     supportsWrite: true,
+    supportsStream: true,
     // Verified boundaries: workspace-write lands inside the working directory and is
     // rejected outside it ("patch rejected: writing outside of the project"); the system
     // temp dir is writable in both modes; network is blocked in both.
     // Never expose danger-full-access — it removes the only boundary here.
-    args: ({ model, prompt, schemaPath, write }) => {
-      const a = ['exec', '--sandbox', write ? 'workspace-write' : 'read-only',
-                 '--skip-git-repo-check', '-m', model];
+    supportsEffort: true,
+    supportsNetwork: true,
+    supportsResume: true,
+    args: ({ model, prompt, schemaPath, write, stream, effort, network, resume }) => {
+      const a = ['exec'];
+      // `resume` continues an existing session instead of starting cold. The house rule
+      // it serves: an agent that died mid-run should be RESUMED, not relaunched — the
+      // context it already paid for survives in the session, and re-reading the repo is
+      // the expensive part.
+      if (resume) a.push('resume', ...(resume === 'last' ? ['--last'] : [resume]));
+      a.push('--sandbox', write ? 'workspace-write' : 'read-only', '--skip-git-repo-check', '-m', model);
+      // `--json` turns stdout into JSONL events instead of prose. It is what makes a long
+      // run watchable — without it codex prints a banner, goes silent for minutes, and
+      // dumps everything at the end, which is indistinguishable from a hang.
+      if (stream) a.push('--json');
+      if (effort) a.push('-c', `model_reasoning_effort=${effort}`);
+      // Network stays OFF by default and is scoped to workspace-write, which is codex's
+      // own boundary — there is no equivalent knob for the read-only sandbox.
+      if (network) a.push('-c', 'sandbox_workspace_write.network_access=true');
       if (schemaPath) a.push('--output-schema', schemaPath);
       a.push(prompt);
       return a;
+    },
+    /**
+     * One JSONL line -> a normalized event, or null for lines we don't surface.
+     *
+     * Shapes verified against codex-cli 0.146.1 (`codex exec --json`):
+     *   {"type":"thread.started","thread_id":"..."}
+     *   {"type":"turn.started"}
+     *   {"type":"item.started"|"item.completed","item":{"type":"agent_message"|"file_change"
+     *      |"command_execution"|"reasoning"|"todo_list"|"web_search", ...}}
+     *   {"type":"turn.completed","usage":{...}}  |  {"type":"turn.failed","error":{...}}
+     *
+     * Unknown `type`s are ignored rather than guessed at: a new event kind must not make
+     * the run look like it failed. Anything that carries the model's prose sets
+     * `answer`, which is what the caller stitches into the final text.
+     */
+    parseEvent: (line) => {
+      let e;
+      try { e = JSON.parse(line); } catch { return null; }
+      if (!e || typeof e !== 'object') return null;
+
+      if (e.type === 'thread.started') return { kind: 'start', id: e.thread_id ?? null };
+      if (e.type === 'turn.failed') {
+        const msg = e.error?.message ?? e.error ?? 'turn failed';
+        return { kind: 'error', text: String(msg) };
+      }
+      if (e.type === 'turn.completed') {
+        const u = e.usage ?? {};
+        const total = (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
+        return { kind: 'done', text: total ? `${total.toLocaleString('en-US')} tokens` : '' };
+      }
+
+      if (e.type !== 'item.completed' && e.type !== 'item.started') return null;
+      const it = e.item ?? {};
+      const started = e.type === 'item.started';
+
+      switch (it.type) {
+        case 'agent_message':
+          // Only completed messages carry the full text; a started one is an empty shell.
+          if (started) return null;
+          return { kind: 'message', text: it.text ?? '', answer: it.text ?? '' };
+        case 'reasoning':
+          if (started) return null;
+          return { kind: 'thinking', text: (it.text ?? '').split('\n')[0] };
+        case 'file_change': {
+          if (started) return null; // report the write once, when it landed
+          const paths = (it.changes ?? []).map((c) => `${c.kind === 'add' ? '+' : c.kind === 'delete' ? '-' : '~'} ${c.path}`);
+          return { kind: 'edit', text: paths.join(', ') };
+        }
+        case 'command_execution': {
+          const cmd = (it.command ?? '').replace(/^\/bin\/(?:ba)?sh -lc\s+/, '');
+          if (started) return { kind: 'run', text: cmd };
+          // Only surface completions that FAILED. A successful command already reported
+          // itself on `started`; echoing it again doubles the noise for no information.
+          if (it.exit_code === 0 || it.exit_code == null) return null;
+          return { kind: 'run-failed', text: `exit ${it.exit_code}: ${cmd}` };
+        }
+        case 'web_search':
+          if (started) return null;
+          return { kind: 'search', text: it.query ?? '' };
+        default:
+          return null;
+      }
     },
   },
 
@@ -112,9 +191,13 @@ export const MODELS = { ...BUILTIN_MODELS, ...(userCfg.models ?? {}) };
 
 // ------------------------------------------------------------------ transport
 
-function runCli(bin, args, timeoutMs, cwd) {
+function runCli(bin, args, timeoutMs, cwd, onLine) {
   return new Promise((resolve) => {
     const t0 = Date.now();
+    // Line buffer for streaming mode. A chunk boundary can land mid-JSON, so lines are
+    // only handed over once terminated — parsing partial chunks is how a stream reader
+    // starts "losing" events that were in fact delivered intact.
+    let pending = '';
     // ⚠️ stdin MUST be 'ignore'. Codex prints "Reading additional input from stdin..."
     // and blocks forever if the pipe stays open — you get only the banner back, which
     // looks like a parse error rather than a hang. Cost an hour once; don't undo it.
@@ -128,7 +211,14 @@ function runCli(bin, args, timeoutMs, cwd) {
       p.kill('SIGKILL');
       resolve({ ok: false, ms: Date.now() - t0, error: `timed out after ${timeoutMs}ms`, text: out });
     }, timeoutMs);
-    p.stdout.on('data', (d) => { out += d; });
+    p.stdout.on('data', (d) => {
+      out += d;
+      if (!onLine) return;
+      pending += d;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? ''; // last element is the unterminated remainder
+      for (const line of lines) if (line.trim()) onLine(line);
+    });
     p.stderr.on('data', (d) => { err += d; });
     p.on('error', (e) => {
       if (done) return;
@@ -139,6 +229,9 @@ function runCli(bin, args, timeoutMs, cwd) {
     p.on('close', (code) => {
       if (done) return;
       clearTimeout(timer);
+      // A final line without a trailing newline is still a line. Dropping it would lose
+      // exactly the event that matters most: the last one.
+      if (onLine && pending.trim()) { onLine(pending); pending = ''; }
       resolve({
         ok: code === 0,
         ms: Date.now() - t0,
@@ -159,10 +252,19 @@ function fail(entry, error) {
  * Call a model by alias.
  * @param {string} alias   key of MODELS (e.g. 'luna')
  * @param {string} prompt  the instruction
- * @param {{timeoutMs?: number, schemaPath?: string, cwd?: string, write?: boolean}} [opts]
- *        cwd    directory the model may read, and the only one it may edit
- *        write  allow edits inside cwd; requires cwd
- * @returns {Promise<{ok, ms, text, error, model, provider}>}
+ * @param {{timeoutMs?: number, schemaPath?: string, cwd?: string, write?: boolean,
+ *          effort?: string, network?: boolean, resume?: string,
+ *          onEvent?: (e: {kind: string, text?: string, id?: string|null}) => void}} [opts]
+ *        cwd      directory the model may read, and the only one it may edit
+ *        write    allow edits inside cwd; requires cwd
+ *        effort   reasoning effort (provider-specific vocabulary, e.g. low|medium|high|xhigh)
+ *        network  let the agent reach the network; requires write, off by default
+ *        resume   session id to continue, or "last" for the most recent
+ *        onEvent  called as the run progresses (file written, command run, message).
+ *                 Providers without a machine-readable event stream simply never call it,
+ *                 so passing it is always safe — you get progress where it exists and
+ *                 silence where it doesn't, never an error.
+ * @returns {Promise<{ok, ms, text, error, model, provider, streamed: boolean}>}
  */
 export async function callModel(alias, prompt, opts = {}) {
   const entry = MODELS[alias];
@@ -178,15 +280,63 @@ export async function callModel(alias, prompt, opts = {}) {
   if (opts.write && provider.supportsWrite === false) {
     return fail(entry, `provider "${entry.provider}" has no write mode wired up in crossmodel; run without --write.`);
   }
+  // Each capability is announced, never assumed. Silently dropping `--effort` would mean
+  // believing a run was reasoning harder than it was — the kind of wrong belief that is
+  // worse than an error, because you act on it.
+  if (opts.effort && provider.supportsEffort !== true) {
+    return fail(entry, `provider "${entry.provider}" has no reasoning-effort control in crossmodel; drop --effort.`);
+  }
+  if (opts.network && provider.supportsNetwork !== true) {
+    return fail(entry, `provider "${entry.provider}" has no network toggle in crossmodel; drop --network.`);
+  }
+  if (opts.resume && provider.supportsResume !== true) {
+    return fail(entry, `provider "${entry.provider}" cannot resume a session in crossmodel; drop --resume.`);
+  }
+  // Network is a workspace-write-scoped setting in codex. Asking for it read-only would
+  // produce a flag that quietly does nothing.
+  if (opts.network && !opts.write) {
+    return fail(entry, '--network only applies with --write (the sandbox toggle it maps to is workspace-write-scoped).');
+  }
+
   if (opts.schemaPath && provider.supportsSchema === false) {
     // Not fatal — just make sure nobody believes the output was schema-constrained.
     console.error(`crossmodel: "${entry.provider}" does not support --schema; the request was sent without it.`);
     opts = { ...opts, schemaPath: undefined };
   }
 
-  const ctx = { model: entry.model, prompt, schemaPath: opts.schemaPath, write: opts.write };
-  const r = await runCli(provider.bin, provider.args(ctx), opts.timeoutMs ?? 240_000, opts.cwd);
-  return { ...r, model: entry.model, provider: entry.provider };
+  // Streaming is opt-in by the caller AND opt-in by the provider: asking for progress from
+  // a CLI that has no event stream must degrade to a normal silent run, never to an error.
+  const stream = Boolean(opts.onEvent) && provider.supportsStream === true && typeof provider.parseEvent === 'function';
+
+  const ctx = {
+    model: entry.model,
+    prompt,
+    schemaPath: opts.schemaPath,
+    write: opts.write,
+    stream,
+    effort: opts.effort,
+    network: opts.network,
+    resume: opts.resume,
+  };
+
+  // In streaming mode stdout is JSONL, so the raw blob is no longer the answer — the answer
+  // is what the agent_message events carried. Stitch it as the events arrive.
+  const answer = [];
+  const onLine = stream
+    ? (line) => {
+        const e = provider.parseEvent(line);
+        if (!e) return;
+        if (e.answer) answer.push(e.answer);
+        try { opts.onEvent(e); } catch { /* a broken reporter must not kill the run */ }
+      }
+    : undefined;
+
+  const r = await runCli(provider.bin, provider.args(ctx), opts.timeoutMs ?? 240_000, opts.cwd, onLine);
+
+  // Falling back to the raw stdout when nothing parsed keeps a protocol change from
+  // silently turning a successful run into an empty answer.
+  const text = stream && answer.length ? answer.join('\n\n').trim() : r.text;
+  return { ...r, text, streamed: stream, model: entry.model, provider: entry.provider };
 }
 
 /** Which aliases are usable right now (binary present on PATH). */

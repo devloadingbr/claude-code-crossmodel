@@ -194,6 +194,116 @@ runs on the external provider's quota. Only review and commit come home.
 
 ---
 
+## Letting it verify its own work
+
+The single most expensive lesson from real use: **an agent that cannot run your tests hands
+back unverified code, and the verification bounces straight back to you.**
+
+Measured here on 2026-08-05. Two implementation phases were delegated with `--write`. Both
+wrote tests. Neither could run the ones that touch a database, because the sandbox blocks
+network and the database listens on localhost. One of those unrun tests was already
+failing against the code that shipped with it — a payment processor that guaranteed *one
+row* but not *one write*, so a redelivered out-of-order event would flip a settled payment
+back to pending. The test named the bug. Nobody saw it run.
+
+So network is a flag now, off by default:
+
+```bash
+crossmodel --model luna --worktree /tmp/wt-feature --write --network \
+  --effort xhigh --timeout 1800000 "Implement SPEC.md. Run npm test AND npm run test:db."
+```
+
+- `--network` requires `--write` (the toggle it maps to is workspace-write-scoped) and
+  stays off unless asked. Turn it on when the agent must run the project's real gate.
+- `--effort <level>` picks reasoning effort in the provider's own vocabulary (codex:
+  `minimal|low|medium|high|xhigh`). A provider without the control **errors** instead of
+  silently ignoring it — believing a run reasoned harder than it did is worse than an error.
+- `--worktree <dir>` creates (or reuses) an isolated git worktree and uses it as `--cwd`.
+  The README used to *recommend* this; now it is one flag. The worktree is left behind
+  deliberately — reviewing that diff is the point.
+- `--resume <id|last>` continues a session that died instead of starting cold. The context
+  it already paid for survives, and re-reading the repo is the expensive part.
+
+### Timeouts are a destructive failure mode under `--write`
+
+A timeout kill is `SIGKILL` wherever the agent happens to be: **half-applied edits stay on
+disk, with no rollback.** A default sized for a question is actively dangerous for an
+implementation run — the two phases above took ~25 minutes each against a 4-minute default.
+
+So the default now depends on what you asked for: **4 min** for a sweep, **1 h** with
+`--write`, and anything under **10 min** with `--write` is *refused* rather than risked.
+Validation runs before any side effect, so a rejected argument never leaves a worktree
+behind. When a `--write` run does fail, the error says the tree may hold partial edits and
+points at `--resume last`.
+
+---
+
+## Knowing what's left
+
+`spend their quota instead of yours` is a claim, and until you can see the number it stays
+one. Worse, an empty pool announces itself as a refused run halfway through a batch —
+the worst possible moment to find out.
+
+```
+$ crossmodel usage
+codex — plan plus
+  quota    █░░░░░░░░░░░░░░░░░░░  4% used of the last 7d
+  resets   08/08/2026, 17:17:48 (in 2d 17h)
+  credits  none
+  tokens   last 24h   15,099,378 in / 110,649 out  (193 sessions)
+           last 7d    15,099,378 in / 110,649 out  (193 sessions)
+```
+
+The codex CLI has no `usage` command, but it writes a transcript per session and the
+server's rate-limit snapshot rides along inside it. So this reads those files: **no network
+call, no auth, and it works while a run is still in flight.** `--json` for scripting.
+
+It reads a format nobody promised to keep stable, so every field is treated as optional:
+an unrecognised shape prints `unknown`, and no data at all exits **2** — because "no
+reading" must never be mistaken for "nothing used".
+
+---
+
+## Watching a run
+
+A long delegation used to be a black box: the CLI printed a banner, went quiet for
+minutes, and dumped everything at the end. Silence and a hang look identical, which is
+the worst property a background job can have.
+
+So progress is now **on by default** for providers that expose a machine-readable event
+stream (codex today, via `--json`). Every file written, command run, and message is
+echoed as it happens:
+
+```
+     0s · session 019fd4f2-18f4-7202-9771-e9a8a3674584
+    11s ✎ + /home/you/repo/src/thing.ts
+    15s $ npx vitest run src/thing.test.ts
+    17s ! exit 1: npx vitest run src/thing.test.ts
+    18s > PRONTO
+    18s = 52,515 tokens
+```
+
+`✎` a write · `$` a command starting · `!` a command that failed or a turn that errored ·
+`~` reasoning · `?` a web search · `>` a message · `=` the token bill.
+
+**Progress goes to stderr; stdout still carries only the answer.** That contract is what
+lets callers keep doing `$(crossmodel ...)` and piping into other tools. In fact stdout
+got *cleaner*: reading the event stream means the answer is the model's actual message,
+with the provider's banner no longer glued to the front of it.
+
+- `--no-stream` — turn the stream off entirely and go back to waiting in silence.
+- `--quiet` — silence the narration but **keep** the stream, because it is also what
+  strips the banner. Tying the two together would make `--quiet` return a dirtier stdout
+  than the default, which is the opposite of what the flag promises.
+
+A provider with no event stream simply never reports; the run works exactly as before and
+says once, on stderr, that progress was unavailable. Asking for progress is always safe.
+
+Codex also keeps its own live transcript at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+— the `session` id on the first line is how you find the right one to tail.
+
+---
+
 ## The benchmark
 
 ```bash
