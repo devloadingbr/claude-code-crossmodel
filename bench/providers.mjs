@@ -11,6 +11,7 @@
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { loadPolicy as loadPermissions } from '../lib/permissions.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 
@@ -157,34 +158,65 @@ export const BUILTIN_PROVIDERS = {
   // this single adapter, so harness and model stop being welded together.
   // Verified against opencode 1.18.14 on 2026-08-07.
   //
-  // 🔴 WRITE IS DELIBERATELY NOT EXPOSED. That is a measurement, not caution.
-  // OpenCode's boundary is an in-process permission check, not an OS sandbox:
+  // 🔴 ITS BOUNDARY IS A POLICY, NOT A SANDBOX. Measured, not assumed:
   //   - Without --auto, the Write TOOL aimed outside the working directory is refused
-  //     ("permission requested: external_directory (...); auto-rejecting"). Good.
-  //   - But `printf 'x' > /path/outside/file` through the SHELL tool succeeded anyway,
-  //     with no --auto. The permission layer guards the file tools; shell redirection
-  //     walks straight past it.
+  //     ("permission requested: external_directory (...); auto-rejecting").
+  //   - But `printf 'x' > /path/outside/file` through the SHELL tool SUCCEEDED, with no
+  //     --auto. The permission layer checks arguments it can see; a path buried in a
+  //     command string is invisible to it.
   //   - --auto removes even the first guard: a file outside the workspace was overwritten.
-  // codex fails the write at the syscall no matter what the model decides. OpenCode
-  // relies on the model deciding. Those are not the same promise, so --write stays with
-  // codex and OpenCode is read-only until someone measures a real sandbox here.
+  //
+  // Write is nonetheless available, because the hole has a shape and the shape has a fix:
+  // an allowlist. crossmodel injects a bash policy whose floor is `"*": "ask"`, and in a
+  // non-interactive run there is nobody to ask, so an unrecognised command is refused.
+  // That puts the shell back under the same policy as the file tools. See lib/permissions.
+  //
+  // ⚠️ Enforced by OpenCode, in process — strong, and still not codex. codex fails the
+  // write at the syscall regardless of what the model decides. Route work that must not
+  // touch the tree to codex; route work that benefits from OpenRouter's model catalogue
+  // here, and review the diff either way.
   opencode: {
     kind: 'cli',
     bin: 'opencode',
     supportsSchema: false,
-    supportsWrite: false,
+    supportsWrite: true,
     supportsEffort: true, // --variant, provider-specific (high, max, minimal)
     supportsResume: true, // --session <id> / --continue
-    args: ({ model, prompt, effort, resume }) => {
-      // `plan` is OpenCode's read-only agent. In testing it declined both a file write
-      // and a shell write, and still answered sweeps cleanly (Glob/Read/Grep all work).
-      // Never pass --auto: its own help calls it dangerous, and the measurement above
-      // shows why. The working directory comes from the spawned process's cwd.
-      const a = ['run', '--agent', 'plan', '-m', model];
+    args: ({ model, prompt, effort, resume, write, cwd }) => {
+      // `plan` is OpenCode's read-only agent and refused both a file write and a shell
+      // write in testing, so read-only runs get the agent AND the policy rather than
+      // relying on either alone. Writing needs `build`.
+      // Never pass --auto: its own help calls it dangerous, and the measurement shows why.
+      const a = ['run', '--agent', write ? 'build' : 'plan', '-m', model];
+      // 🔴 --dir IS NOT OPTIONAL, and leaving it out is not a cosmetic bug.
+      // Every other provider here takes its working directory from the spawned process.
+      // OpenCode does not: measured with the child's cwd set to a target repo and the
+      // PARENT sitting in /tmp, it wrote /tmp/NEW.txt. It resolves writes against the
+      // inherited environment, not getcwd(), so the only thing that actually aims it is
+      // this flag. Without it a --write run lands in whatever directory the caller
+      // happened to be in — silently, and outside anything the user named.
+      if (cwd) a.push('--dir', cwd);
       if (effort) a.push('--variant', effort);
       if (resume) a.push(...(resume === 'last' ? ['--continue'] : ['--session', resume]));
       a.push(prompt);
       return a;
+    },
+    // ⚠️ OPENCODE_CONFIG_CONTENT, not OPENCODE_CONFIG, and the difference is the whole
+    // point. Config precedence is: global < OPENCODE_CONFIG < PROJECT opencode.json <
+    // OPENCODE_CONFIG_CONTENT. Passing the policy via OPENCODE_CONFIG would let a
+    // project-level opencode.json in the very repo being swept override it — a repo you
+    // do not control could hand itself `"permission": "allow"`. The inline form loads
+    // after the project config and therefore wins.
+    env: ({ write, cwd }) => {
+      const { policy, error } = loadPermissions({ write });
+      if (error) console.error(`crossmodel: ${error} — falling back to the built-in policy.`);
+      return {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify(policy),
+        // Belt and braces with --dir. PWD is inherited from the parent shell and is the
+        // most likely thing OpenCode consulted when it wrote to the wrong directory;
+        // leaving it pointing somewhere else is asking for that bug to come back.
+        ...(cwd ? { PWD: cwd } : {}),
+      };
     },
   },
 
@@ -250,7 +282,7 @@ export const MODELS = { ...BUILTIN_MODELS, ...(userCfg.models ?? {}) };
 
 // ------------------------------------------------------------------ transport
 
-function runCli(bin, args, timeoutMs, cwd, onLine) {
+function runCli(bin, args, timeoutMs, cwd, onLine, extraEnv) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     // Line buffer for streaming mode. A chunk boundary can land mid-JSON, so lines are
@@ -263,7 +295,13 @@ function runCli(bin, args, timeoutMs, cwd, onLine) {
     //
     // `cwd` is load-bearing: it is the directory the agent can read, and (with write)
     // the only one it can edit.
-    const p = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], ...(cwd ? { cwd } : {}) });
+    const p = spawn(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(cwd ? { cwd } : {}),
+      // Some providers take their boundary from configuration rather than a sandbox, and
+      // configuration arrives through the environment. See the opencode entry.
+      ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
+    });
     let out = '', err = '', done = false;
     const timer = setTimeout(() => {
       done = true;
@@ -390,6 +428,9 @@ export async function callModel(alias, prompt, opts = {}) {
     model: entry.model,
     prompt,
     schemaPath: opts.schemaPath,
+    // Most providers take the working directory from the spawned process and never look
+    // at this. OpenCode has to be aimed explicitly — see its entry.
+    cwd: opts.cwd,
     write: opts.write,
     stream,
     effort: opts.effort,
@@ -409,7 +450,11 @@ export async function callModel(alias, prompt, opts = {}) {
       }
     : undefined;
 
-  const r = await runCli(provider.bin, provider.args(ctx), opts.timeoutMs ?? 240_000, opts.cwd, onLine);
+  // A provider may need environment as well as arguments — for OpenCode the permission
+  // policy travels that way, because it is the only channel a swept repo cannot override.
+  const extraEnv = typeof provider.env === 'function' ? provider.env(ctx) : undefined;
+
+  const r = await runCli(provider.bin, provider.args(ctx), opts.timeoutMs ?? 2_400_000, opts.cwd, onLine, extraEnv);
 
   // Falling back to the raw stdout when nothing parsed keeps a protocol change from
   // silently turning a successful run into an empty answer.

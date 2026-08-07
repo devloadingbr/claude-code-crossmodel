@@ -14,7 +14,7 @@ The catch nobody addresses: **how do you know what the cheap model can actually 
 So this ships with a deterministic benchmark. No LLM judges another LLM; a test suite
 decides.
 
-> **Status: v0.8.0, early.** Works, tested end to end, but the API may move. Issues and
+> **Status: v0.9.0, early.** Works, tested end to end, but the API may move. Issues and
 > PRs welcome.
 
 ---
@@ -409,19 +409,54 @@ OpenAI, Google and anything OpenAI-compatible all arrive through a single adapte
 harness and model stop being welded together. The `flash` alias ships working out of the
 box with no API key and no cost; `opencode models` lists what your install offers.
 
-**It is read-only here, and that is a measurement.** OpenCode's boundary is an in-process
-permission check, not an OS sandbox. Tested against opencode 1.18.14:
+**Its boundary is a policy, not a sandbox.** OpenCode has no OS sandbox; it has a
+permission layer, and that layer only checks arguments it can see. A path handed to the
+Write tool is checked. The same path inside `printf 'x' > /outside/file` is not — to the
+permission layer that is just "run a command". Measured against opencode 1.18.14, with no
+`--auto`: the first was refused, the second succeeded.
+
+An **allowlist** closes exactly that. crossmodel injects a bash policy whose floor is
+`"*": "ask"`, and a non-interactive run has nobody to ask, so an unrecognised command is
+refused. The shell stops being a way around the policy and becomes subject to it.
+
+The shipped default is the house rule as configuration — let the agent work, keep what is
+the orchestrator's:
+
+| | |
+|---|---|
+| read, search, `git diff/log/status` | allow |
+| edit inside the working dir | allow with `--write` |
+| `npm test`, `tsc`, `cargo`, build tools | allow with `--write` |
+| `git commit`, `push`, `reset`, `rebase`, `checkout` | **deny** — what enters history is yours |
+| `rm`, `sudo`, `curl`, `ssh`, package installers | **deny** |
+| anything else | `ask` → refused |
+
+Override it in `~/.claude/crossmodel/permissions.json`.
+
+Verified end to end, not assumed — with the policy active, in a `--write` run:
 
 | Attempt | Result |
 |---|---|
-| Write **tool** outside the working dir, no `--auto` | ✅ refused (`external_directory; auto-rejecting`) |
-| Same write with `--auto` | 🔴 **succeeded** — file outside overwritten |
-| `printf 'x' > /outside/file` via the **shell** tool, no `--auto` | 🔴 **succeeded** |
+| Write a file inside the working dir | ✅ succeeds |
+| Write **tool** aimed outside it | 🔒 blocked |
+| `printf 'x' > /outside/file` via the **shell** | 🔒 blocked — the old hole |
+| Edit a file, then `git commit` | ✅ edited · 🔒 commit refused |
+| `rm` a file | 🔒 blocked |
+| `git diff --stat` | ✅ still works |
+| A repo shipping `opencode.json` with `"permission":"allow"` | 🔒 cannot override |
 
-The permission layer guards the file tools; shell redirection walks past it. codex fails
-the write at the syscall regardless of what the model decides — OpenCode relies on the
-model deciding. Those are different promises, so `--write` stays with codex, crossmodel
-never passes `--auto`, and OpenCode runs under its read-only `plan` agent.
+That last row is why the policy travels as `OPENCODE_CONFIG_CONTENT` and not
+`OPENCODE_CONFIG`: config precedence puts a project's own `opencode.json` *above* the
+latter, so a repo you do not control could hand itself full permissions. The inline form
+loads after the project config and wins.
+
+⚠️ Still enforced in process, by OpenCode. Much stronger than nothing, and not codex —
+which fails the write at the syscall no matter what the model decides. Route work that
+must not touch the tree to codex.
+
+**One trap worth knowing if you script OpenCode yourself:** it does not take its working
+directory from the spawned process. With the child's cwd set to a target repo and the
+parent sitting in `/tmp`, it wrote `/tmp/NEW.txt`. `--dir` is what actually aims it.
 
 ### Why CLI only, and no HTTP APIs
 
