@@ -31,6 +31,23 @@ const flag = (name, fallback = null) => {
 };
 const has = (name) => argv.includes(`--${name}`);
 
+// The installed plugin lives under a versioned path and a shim usually picks the newest
+// one, so "which build am I actually running" is a real question with a confusing answer.
+// Printing it turns "that subcommand does not exist" into "you are on an older build".
+const VERSION = (() => {
+  try {
+    const here = path.dirname(new URL(import.meta.url).pathname);
+    return JSON.parse(readFileSync(path.join(here, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+
+if (has('version')) {
+  console.log(`crossmodel ${VERSION}`);
+  process.exit(0);
+}
+
 // ── `crossmodel mode` ────────────────────────────────────────────────────────────────
 // Saver mode is a standing bias, not a one-off flag: while it is on, the routing hook
 // injects a short "delegate by default" reminder into every turn instead of waiting for
@@ -244,6 +261,9 @@ Options:
                      warning on stderr — never silently, or you would trust a shape
                      nothing enforced)
   --list             show which models are usable here, then exit
+  --version          print the build you are actually running. Worth checking when a
+                     subcommand you expected is missing: the plugin installs under a
+                     versioned path, so an old build can linger.
   --quiet            print only the answer, no stderr diagnostics
   --no-stream        do not report progress; wait in silence and print only the answer.
                      Progress is ON by default for providers that expose an event stream
@@ -278,6 +298,22 @@ if (has('list')) {
   console.log('\nAll providers are agentic CLIs: pass --cwd <dir> and they explore the repo themselves.');
   console.log('Nothing here is configured? Run /crossmodel-setup.');
   process.exit(0);
+}
+
+// Every subcommand has already claimed its argv[0] and exited by now. Anything left that
+// LOOKS like one is a typo, or a subcommand from a version this install does not have —
+// and without this check it silently becomes the prompt. That is not a cosmetic problem:
+// `crossmodel moed status` would have sent "moed status" to a model and billed a real
+// call for a typo. Reported from the field: `crossmodel teach` on an older build answered
+// "--model is required", which explains nothing.
+const SUBCOMMANDS = ['mode', 'usage', 'teach'];
+const first = argv[0];
+if (first && !first.startsWith('--') && !flag('model') && /^[a-z][a-z-]*$/.test(first)) {
+  console.error(`crossmodel: "${first}" is not a subcommand of this build (${VERSION}).`);
+  console.error(`  Known subcommands: ${SUBCOMMANDS.join(', ')}. Newer versions may add more —`);
+  console.error('  update the plugin if you expected one that is missing.');
+  console.error('  To send this as a PROMPT instead, pass --model: crossmodel --model <alias> "..."');
+  process.exit(1);
 }
 
 const alias = flag('model');
