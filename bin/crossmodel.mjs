@@ -187,7 +187,7 @@ Options:
                      the most recent. Use after a run dies — the context it already paid
                      for survives, and re-reading the repo is the expensive part.
   --file <path>      append a file's contents to the prompt
-  --timeout <ms>     default 240000, or 3600000 with --write. Under --write a timeout kill
+  --timeout <ms>     default 2400000 (40 min), or 3600000 with --write. Under --write a kill
                      leaves half-applied edits with no rollback, so values under 600000
                      are refused rather than risked.
   --schema <path>    JSON Schema for structured output (only providers whose CLI
@@ -279,7 +279,11 @@ const write = has('write');
 // a question (4 min) is therefore actively dangerous for an implementation run — measured
 // at ~25 min for a single phase. So --write gets a default an order of magnitude larger,
 // and an explicitly short one is refused rather than silently honoured.
-const SWEEP_TIMEOUT_MS = 240_000;       // 4 min — plenty for "which files do X"
+const SWEEP_TIMEOUT_MS = 2_400_000;     // 40 min — measured: a real sweep on a large repo
+                                        // routinely outruns a 4-minute default, and the
+                                        // kill looked like a provider failure rather than
+                                        // an impatient caller. Read-only, so a kill costs
+                                        // the run and nothing else.
 const WRITE_TIMEOUT_MS = 3_600_000;     // 1 h  — an implementation run reads before it writes
 const WRITE_TIMEOUT_FLOOR_MS = 600_000; // below 10 min, --write is a coin flip
 
@@ -462,7 +466,10 @@ if (!r.ok) {
   // A died-mid-run agent leaves two things behind: possibly-partial edits, and a session
   // that still holds everything it read. Say both, because the instinct is to relaunch —
   // and relaunching pays the expensive part (reading the repo) all over again.
-  if (write) {
+  // Only after a run that actually STARTED. A pre-flight guard (unknown flag, provider
+  // without write support) spawns nothing, so telling the caller to inspect the tree for
+  // half-applied edits sends them hunting for damage that cannot exist.
+  if (write && r.started !== false) {
     console.error(`crossmodel: ${cwd} may hold PARTIAL edits — check \`git -C ${cwd} status\` before rerunning.`);
     console.error('crossmodel: to continue where it stopped instead of starting cold: --resume last');
   }

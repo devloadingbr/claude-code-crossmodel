@@ -56,8 +56,23 @@ export const BUILTIN_PROVIDERS = {
       // it serves: an agent that died mid-run should be RESUMED, not relaunched — the
       // context it already paid for survives in the session, and re-reading the repo is
       // the expensive part.
-      if (resume) a.push('resume', ...(resume === 'last' ? ['--last'] : [resume]));
-      a.push('--sandbox', write ? 'workspace-write' : 'read-only', '--skip-git-repo-check', '-m', model);
+      //
+      // ⚠️ `resume` IS A DIFFERENT SUBCOMMAND WITH A DIFFERENT OPTION SET, and missing that
+      // broke this flag from 0.6.0 until it was measured against codex-cli 0.146.1.
+      // Two traps, both of which produce misleading errors:
+      //   1. Grammar is `codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]` — the id is a
+      //      POSITIONAL, so options must precede it.
+      //   2. `resume` does NOT accept --sandbox at all. Emitting it produced "unexpected
+      //      argument '--sandbox'", which reads like a bug somewhere unrelated.
+      // The sandbox still has to be stated: dropping it would resume under whatever the
+      // user's config happens to default to, losing a security boundary silently. The
+      // equivalent `resume` accepts is the config override, verified working.
+      if (resume) {
+        a.push('resume', '-c', `sandbox_mode="${write ? 'workspace-write' : 'read-only'}"`);
+      } else {
+        a.push('--sandbox', write ? 'workspace-write' : 'read-only');
+      }
+      a.push('--skip-git-repo-check', '-m', model);
       // `--json` turns stdout into JSONL events instead of prose. It is what makes a long
       // run watchable — without it codex prints a banner, goes silent for minutes, and
       // dumps everything at the end, which is indistinguishable from a hang.
@@ -67,6 +82,9 @@ export const BUILTIN_PROVIDERS = {
       // own boundary — there is no equivalent knob for the read-only sandbox.
       if (network) a.push('-c', 'sandbox_workspace_write.network_access=true');
       if (schemaPath) a.push('--output-schema', schemaPath);
+      // Positional session id goes last, immediately before the prompt. "--last" is an
+      // ordinary flag, so it is safe here too.
+      if (resume) a.push(resume === 'last' ? '--last' : resume);
       a.push(prompt);
       return a;
     },
@@ -134,6 +152,42 @@ export const BUILTIN_PROVIDERS = {
     },
   },
 
+  // OpenCode — one harness, many backends. This is the entry that opens the plugin up:
+  // OpenRouter, Ollama, OpenAI, Google and anything OpenAI-compatible all arrive through
+  // this single adapter, so harness and model stop being welded together.
+  // Verified against opencode 1.18.14 on 2026-08-07.
+  //
+  // 🔴 WRITE IS DELIBERATELY NOT EXPOSED. That is a measurement, not caution.
+  // OpenCode's boundary is an in-process permission check, not an OS sandbox:
+  //   - Without --auto, the Write TOOL aimed outside the working directory is refused
+  //     ("permission requested: external_directory (...); auto-rejecting"). Good.
+  //   - But `printf 'x' > /path/outside/file` through the SHELL tool succeeded anyway,
+  //     with no --auto. The permission layer guards the file tools; shell redirection
+  //     walks straight past it.
+  //   - --auto removes even the first guard: a file outside the workspace was overwritten.
+  // codex fails the write at the syscall no matter what the model decides. OpenCode
+  // relies on the model deciding. Those are not the same promise, so --write stays with
+  // codex and OpenCode is read-only until someone measures a real sandbox here.
+  opencode: {
+    kind: 'cli',
+    bin: 'opencode',
+    supportsSchema: false,
+    supportsWrite: false,
+    supportsEffort: true, // --variant, provider-specific (high, max, minimal)
+    supportsResume: true, // --session <id> / --continue
+    args: ({ model, prompt, effort, resume }) => {
+      // `plan` is OpenCode's read-only agent. In testing it declined both a file write
+      // and a shell write, and still answered sweeps cleanly (Glob/Read/Grep all work).
+      // Never pass --auto: its own help calls it dangerous, and the measurement above
+      // shows why. The working directory comes from the spawned process's cwd.
+      const a = ['run', '--agent', 'plan', '-m', model];
+      if (effort) a.push('--variant', effort);
+      if (resume) a.push(...(resume === 'last' ? ['--continue'] : ['--session', resume]));
+      a.push(prompt);
+      return a;
+    },
+  },
+
   // Google Gemini CLI. 🟡 Argument shape not yet verified against a real install —
   // see issue #1. Fix and send a PR if it is wrong.
   gemini: {
@@ -162,6 +216,11 @@ export const BUILTIN_MODELS = {
   sol:    { provider: 'codex',  model: 'gpt-5.6-sol' },
   terra:  { provider: 'codex',  model: 'gpt-5.6-terra' },
   luna:   { provider: 'codex',  model: 'gpt-5.6-luna' },
+  // Verified working on 2026-08-07: no auth, no API key, no cost. The point of shipping
+  // one is that a provider nobody can type into --model is a provider nobody uses — the
+  // mistake gemini and ollama have been making here since day one.
+  // `opencode models` lists what your install actually offers; add the rest via config.
+  flash:  { provider: 'opencode', model: 'opencode/deepseek-v4-flash-free' },
 };
 
 // ------------------------------------------------------------ user overrides
@@ -244,8 +303,11 @@ function runCli(bin, args, timeoutMs, cwd, onLine) {
 
 // --------------------------------------------------------------------- API
 
+// `started: false` marks a PRE-FLIGHT rejection — an argument guard fired and no process
+// was ever spawned. Callers need the distinction: a post-mortem about partial edits or a
+// resumable session is actively misleading when nothing ran.
 function fail(entry, error) {
-  return { ok: false, ms: 0, text: '', error, model: entry.model, provider: entry.provider };
+  return { ok: false, ms: 0, text: '', error, model: entry.model, provider: entry.provider, started: false };
 }
 
 /**

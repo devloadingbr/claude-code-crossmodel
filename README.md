@@ -14,7 +14,7 @@ The catch nobody addresses: **how do you know what the cheap model can actually 
 So this ships with a deterministic benchmark. No LLM judges another LLM; a test suite
 decides.
 
-> **Status: v0.7.0, early.** Works, tested end to end, but the API may move. Issues and
+> **Status: v0.8.0, early.** Works, tested end to end, but the API may move. Issues and
 > PRs welcome.
 
 ---
@@ -395,7 +395,28 @@ into that CLI's argument list — which JSON can't express. It belongs in
 `bench/providers.mjs` as a pull request. It is about ten lines; see `codex` for the shape,
 including how a sandbox flag maps to `write`.
 
-Built in: `codex`, `gemini`, `ollama`, and `claude` (as the benchmark baseline).
+Built in: `codex`, `opencode`, `gemini`, `ollama`, and `claude` (as the benchmark baseline).
+
+### OpenCode: one harness, many backends
+
+`opencode` is the entry that opens this up. It is provider-neutral, so OpenRouter, Ollama,
+OpenAI, Google and anything OpenAI-compatible all arrive through a single adapter —
+harness and model stop being welded together. The `flash` alias ships working out of the
+box with no API key and no cost; `opencode models` lists what your install offers.
+
+**It is read-only here, and that is a measurement.** OpenCode's boundary is an in-process
+permission check, not an OS sandbox. Tested against opencode 1.18.14:
+
+| Attempt | Result |
+|---|---|
+| Write **tool** outside the working dir, no `--auto` | ✅ refused (`external_directory; auto-rejecting`) |
+| Same write with `--auto` | 🔴 **succeeded** — file outside overwritten |
+| `printf 'x' > /outside/file` via the **shell** tool, no `--auto` | 🔴 **succeeded** |
+
+The permission layer guards the file tools; shell redirection walks past it. codex fails
+the write at the syscall regardless of what the model decides — OpenCode relies on the
+model deciding. Those are different promises, so `--write` stays with codex, crossmodel
+never passes `--auto`, and OpenCode runs under its read-only `plan` agent.
 
 ### Why CLI only, and no HTTP APIs
 
