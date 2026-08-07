@@ -126,7 +126,27 @@ Be explicit with the user about `measured`:
 - `"measured": true` — only after they have run `bench/battery.mjs` on tasks that
   resemble their real work. Setting it true without doing that only fools them later.
 
-## Step 7 — hand off
+## Step 7 — offer the project primer (ask first)
+
+A future session in this project will not know crossmodel exists unless something tells
+it. `crossmodel teach` writes a short primer into the project's `CLAUDE.md`, between
+`BEGIN`/`END` markers, naming the aliases that actually work here.
+
+**Ask before running it, and do not run it unprompted.** `CLAUDE.md` is versioned: it ships
+to everyone who clones the repo, and the user may not want plugin instructions committed
+for teammates who do not have it installed.
+
+```bash
+crossmodel teach --dry-run     # show them exactly what it adds
+crossmodel teach               # only after they say yes
+```
+
+Re-running updates the block in place; deleting the marker lines removes it. Nothing
+outside the markers is touched, and a half-written marker pair is refused rather than
+guessed at. If they decline, say the `#route` trigger and saver mode already work without
+it — the primer is convenience, not a requirement.
+
+## Step 8 — hand off
 
 Tell the user:
 

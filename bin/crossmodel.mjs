@@ -22,6 +22,7 @@ import path from 'node:path';
 import { callModel, MODELS, availableModels } from '../bench/providers.mjs';
 import { readMode, writeMode, clearMode, parseUntil, describeUntil, MODE_PATH } from '../lib/mode.mjs';
 import { codexUsage, describeWindow, describeReset, bar } from '../lib/usage.mjs';
+import { teach } from '../lib/teach.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -92,6 +93,44 @@ if (argv[0] === 'mode') {
 // The number behind the whole premise. "Spend their quota instead of yours" is a claim
 // you cannot check without it — and an empty pool announces itself as a refused run in
 // the middle of a batch, which is the worst moment to find out.
+// ── `crossmodel teach` ───────────────────────────────────────────────────────────────
+// Writes a short primer into a project's CLAUDE.md, between markers, so it can be updated
+// or removed without touching anything else. Deliberately NOT part of installing the
+// plugin: CLAUDE.md is versioned and ships to everyone who clones the repo, so editing it
+// is the user's call, made once, in the open.
+if (argv[0] === 'teach') {
+  const target = path.resolve(flag('file') ?? 'CLAUDE.md');
+  const existed = existsSync(target);
+
+  if (has('dry-run')) {
+    const { primer } = await import('../lib/teach.mjs');
+    const av = await availableModels();
+    process.stdout.write(`${primer(Object.entries(av).map(([alias, v]) => ({ alias, ...v })))}\n`);
+    console.error(`\ncrossmodel: dry run — nothing written. Target would be ${target}.`);
+    process.exit(0);
+  }
+
+  const av = await availableModels();
+  const r = teach(target, Object.entries(av).map(([alias, v]) => ({ alias, ...v })));
+  if (!r.ok) {
+    console.error(`crossmodel: refusing to edit ${target} — ${r.error}`);
+    process.exit(1);
+  }
+
+  console.error(`crossmodel: ${r.action} the crossmodel block in ${target}`);
+  if (r.action === 'unchanged') {
+    console.error('crossmodel: already up to date.');
+  } else {
+    console.error('crossmodel: only the text between the BEGIN/END markers is managed — edit around it freely.');
+    // It is a tracked file in someone's repo. Saying how to look and how to undo costs one
+    // line and saves the "what did that just do to my project" moment.
+    const inRepo = spawnSync('git', ['-C', path.dirname(target), 'rev-parse', '--git-dir'], { encoding: 'utf8' }).status === 0;
+    if (inRepo) console.error(`crossmodel: review it with \`git diff ${path.basename(target)}\` before committing.`);
+    else if (existed) console.error('crossmodel: this file is not in a git repo — there is no undo but your own backup.');
+  }
+  process.exit(0);
+}
+
 if (argv[0] === 'usage') {
   const u = codexUsage();
   const n = (x) => (x ?? 0).toLocaleString();
@@ -141,6 +180,16 @@ if (has('help') || (!argv.length)) {
   crossmodel --list
   crossmodel usage [--json]
   crossmodel mode on|off|status
+  crossmodel teach [--file CLAUDE.md] [--dry-run]
+
+Teach — put a short primer in a project's CLAUDE.md:
+  crossmodel teach --dry-run     # print it, write nothing
+  crossmodel teach               # write it into ./CLAUDE.md
+
+  Names the aliases that actually work on this machine, and covers what cannot be guessed
+  from the code: exit-code semantics, which provider is genuinely sandboxed, and that
+  delegated models never commit. Lives between BEGIN/END markers, so re-running updates
+  it in place and deleting those lines removes it. Nothing outside the markers is touched.
 
 Usage — how much of the provider's quota is left:
   crossmodel usage

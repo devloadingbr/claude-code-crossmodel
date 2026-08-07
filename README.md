@@ -15,7 +15,7 @@ The catch nobody addresses: **how do you know what the cheap model can actually 
 So this ships with a deterministic benchmark. No LLM judges another LLM; a test suite
 decides.
 
-> **Status: v0.9.0, early.** Works, tested end to end, but the API may move. Issues and
+> **Status: v0.10.0, early.** Works, tested end to end, but the API may move. Issues and
 > PRs welcome.
 
 ---
@@ -169,6 +169,31 @@ One counterintuitive rule it enforces: **call the CLI straight from Bash rather 
 through the `delegate` subagent.** That subagent is itself a Claude model — using it to
 save Anthropic quota spends Anthropic quota. It earns its cost when the output is large or
 the batch is long, and not before.
+
+### 5. `crossmodel teach` — tell the project this exists
+
+A future session opening your repo has no idea crossmodel is installed, so it does the
+mechanical lookups itself and spends your quota doing it.
+
+```bash
+crossmodel teach --dry-run     # print the block, write nothing
+crossmodel teach               # write it into ./CLAUDE.md
+```
+
+It writes a short primer between `<!-- BEGIN crossmodel -->` / `<!-- END crossmodel -->`
+markers, naming **the aliases that actually work on this machine** rather than examples
+that fail on first use. Re-running updates the block in place; deleting the marker lines
+removes it; nothing outside them is ever touched, and a half-written marker pair is refused
+rather than guessed at.
+
+It is a command and not something the install does, on purpose. Installing a plugin does
+not execute code — and `CLAUDE.md` is versioned, so it ships to everyone who clones the
+repo. Committing instructions on your behalf, to teammates who may not have the plugin,
+is not a plugin's decision to make.
+
+The block stays short deliberately. `CLAUDE.md` is loaded into every session, so each line
+is a tax on every turn forever; it carries only what cannot be inferred from the code —
+exit-code semantics, which provider is genuinely sandboxed, and who commits.
 
 ---
 
