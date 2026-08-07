@@ -33,8 +33,8 @@ step 3 rather than redoing everything.
 ## Step 2 — detect installed providers
 
 ```bash
-for b in codex gemini ollama claude; do
-  printf '%-8s ' "$b"; command -v $b >/dev/null && echo installed || echo "not installed"
+for b in codex opencode gemini ollama claude; do
+  printf '%-9s ' "$b"; command -v $b >/dev/null && echo installed || echo "not installed"
 done
 ```
 
@@ -43,8 +43,16 @@ For each **installed** provider, check authentication before going further:
 | Provider | Check | If not authenticated |
 |---|---|---|
 | `codex` | `codex login status` | Tell the user to run `codex login` themselves — it is an account OAuth flow and you must not do it for them |
+| `opencode` | `opencode models` | Some models need no auth at all — the list includes free ones. For a paid provider (OpenRouter, OpenAI…) tell the user to run `opencode auth login` themselves; same principle |
 | `gemini` | provider's own auth command | same principle |
 | `ollama` | `ollama list` | no auth; if the list is empty they need to pull a model first |
+
+`opencode` is worth offering even when `codex` is present: it is provider-neutral, so it
+reaches OpenRouter, Ollama and any OpenAI-compatible endpoint through one adapter. Its
+model strings are `provider/model` exactly as `opencode models` prints them — never invent
+one. Its `--write` runs under the permission policy in `~/.claude/crossmodel/permissions.json`,
+which is enforced by OpenCode rather than by an OS sandbox; say so if the user asks whether
+it is as confined as codex, because it is not.
 
 If nothing is installed, stop and recommend one. The cheapest entry point is Codex,
 because it authenticates with a ChatGPT subscription rather than a metered API key:
@@ -108,7 +116,7 @@ use this plugin at all.
 
 ## Step 6 — routing policy
 
-Copy `routing.example.json` to `routing.json` in the plugin root and edit the model names
+Copy `routing.example.json` to `~/.claude/crossmodel/routing.json` and edit the model names
 to match the aliases just created.
 
 Be explicit with the user about `measured`:

@@ -3,8 +3,9 @@
 **Delegate work from Claude Code to another agentic CLI — and know which models you can trust with what.**
 
 Claude Code is excellent at orchestrating. It is also the only thing spending your
-Anthropic quota. `crossmodel` hands work to an external agentic CLI — OpenAI's Codex,
-Gemini, a local Ollama model — so it bills to *that* provider's pool instead.
+Anthropic quota. `crossmodel` hands work to an external agentic CLI — OpenAI's Codex, or
+OpenCode and through it OpenRouter, Ollama and anything OpenAI-compatible — so it bills to
+*that* provider's pool instead.
 
 "Agentic" is the load-bearing word. These are not chat endpoints: point one at a
 directory and it greps and reads the tree itself, and with `--write` it edits inside that
@@ -36,13 +37,19 @@ That detects which provider CLIs you have, asks which models you want and what t
 them, **verifies each one with a real call**, and writes the config. No hand-edited JSON,
 and no alias left in the file that fails the first time you use it.
 
-You need at least one provider installed. The cheapest entry point is OpenAI's Codex,
-because it authenticates with a ChatGPT subscription instead of a metered API key:
+You need at least one provider installed. Two good entry points:
 
 ```bash
-npm install -g @openai/codex
-codex login
+npm install -g opencode-ai      # free models available with no key at all
+npm install -g @openai/codex    # then: codex login
 ```
+
+**OpenCode** costs nothing to try — `opencode models` lists free models that need no
+account, and the shipped `flash` alias uses one. It is also provider-neutral, so the same
+binary later reaches OpenRouter, Ollama or any OpenAI-compatible endpoint.
+
+**Codex** is the one with an OS sandbox, so it is where write-heavy work belongs. It bills
+to a ChatGPT subscription rather than a metered API key.
 
 Prefer to configure by hand? Copy `crossmodel.config.example.json` to
 `crossmodel.config.json`. The setup skill just does this for you, with verification.
@@ -61,8 +68,9 @@ crossmodel --list
 
 The alias hides which binary it is, so nothing downstream cares.
 
-**Exit codes are load-bearing:** `0` success, `1` usage error, `2` the call failed, `3` a
-`--write` run that changed nothing.
+**Exit codes are load-bearing:** `0` success, `1` usage error, `2` the call failed —
+including a provider that exited 0 with an empty answer — and `3` a `--write` run that
+changed nothing. `--help` prints the full flag list.
 A failed call still produces text, and text looks like an answer — anything consuming
 this must check the exit code first.
 
@@ -70,6 +78,11 @@ this must check the exit code first.
 with it. A CLI can refuse a tool call, explain itself on stderr, write nothing to stdout
 and still exit 0 — leaving a blocked run and a working one indistinguishable. Silence is
 never reported as a result here.
+
+**Exit 3 is checked two ways**, because only some providers report their edits as events.
+When there is no event stream the working tree is compared before and after. If neither is
+possible — no stream and the target is not a git repo — crossmodel says it could not tell,
+rather than implying files changed.
 
 #### Repo sweeps — the part worth stealing
 
@@ -232,8 +245,11 @@ crossmodel --model luna --worktree /tmp/wt-feature --write --network \
 - `--effort <level>` picks reasoning effort in the provider's own vocabulary (codex:
   `minimal|low|medium|high|xhigh`). A provider without the control **errors** instead of
   silently ignoring it — believing a run reasoned harder than it did is worse than an error.
-- `--worktree <dir>` creates (or reuses) an isolated git worktree and uses it as `--cwd`,
-  **symlinking `node_modules` in**. That last part is not a convenience: a fresh worktree
+- `--worktree <dir>` creates an isolated git worktree and uses it as `--cwd`. An existing
+  path is reused only after it is **verified to be a linked worktree** — an ordinary
+  directory, or the main checkout, is refused rather than written to, because a flag whose
+  purpose is isolation must not quietly hand over something that is not isolated. It also
+  **symlinks `node_modules` in**. That part is not a convenience: a fresh worktree
   has no installed dependencies, so the agent cannot run the very tests it was asked to
   prove its work with — an isolation flag that blocks verification is a trap, not
   isolation. Add `--link a,b` for the gitignored files a checkout lacks and the tests
@@ -248,7 +264,7 @@ A timeout kill is `SIGKILL` wherever the agent happens to be: **half-applied edi
 disk, with no rollback.** A default sized for a question is actively dangerous for an
 implementation run — the two phases above took ~25 minutes each against a 4-minute default.
 
-So the default now depends on what you asked for: **4 min** for a sweep, **1 h** with
+So the default now depends on what you asked for: **40 min** for a sweep, **1 h** with
 `--write`, and anything under **10 min** with `--write` is *refused* rather than risked.
 Validation runs before any side effect, so a rejected argument never leaves a worktree
 behind. When a `--write` run does fail, the error says the tree may hold partial edits and
@@ -478,13 +494,18 @@ discipline beat surface area: if it can't read your working directory, it's out.
   `--cwd`; HTTP-backed models see nothing but the prompt text. Neither can see the
   *conversation*, so state the goal explicitly either way.
 - **Read-only is the default; `--write` is opt-in and scoped.** Edits are confined to the
-  `--cwd` you name, and nothing external ever commits. Use a `git worktree` when two
-  agents might otherwise share a tree.
+  `--cwd` you name, and nothing external commits — but *how* that holds differs by
+  provider. codex enforces it in the kernel: the write fails, and `.git/` is read-only, so
+  an agent can edit and cannot commit no matter what it decides. OpenCode enforces it with
+  the shipped permission policy, in process, and a `permissions.json` that allows
+  `git commit *` would undo it. The default denies it; nothing stops you from overriding
+  your own guardrail. Use a `git worktree` when two agents might otherwise share a tree.
 - **Read access is NOT confined to `--cwd`.** A delegated model can read anything your
-  user can — `.env`, `~/.aws/credentials`, shell history. It cannot send them anywhere
-  (network is blocked in every sandbox mode), but it *can* quote them back to you, and
-  that answer lands in your transcript. Don't point a sweep at a tree whose secrets you
-  don't want repeated.
+  user can — `.env`, `~/.aws/credentials`, shell history. By default it cannot send them
+  anywhere (network is off unless you pass `--network`, which itself requires `--write`),
+  but it *can* quote them back to you, and that answer lands in your transcript. Don't
+  point a sweep at a tree whose secrets you don't want repeated — and think twice before
+  combining `--network` with a tree that holds any.
 - **Benchmark scores measure a pair, not a model.** `code` scores near-ceiling for most
   models *because a test suite runs underneath*. Remove the verifier and the number
   tells you nothing.

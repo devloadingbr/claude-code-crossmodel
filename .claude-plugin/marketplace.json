@@ -12,7 +12,7 @@
     {
       "name": "crossmodel",
       "source": "./",
-      "description": "Delegate work from Claude Code to any external LLM CLI (Codex, Gemini, Ollama, or your own), spending that provider's quota instead of your Anthropic quota. Includes a deterministic multi-provider benchmark to decide what each model can be trusted with.",
+      "description": "Delegate work from Claude Code to any external LLM CLI (Codex, OpenCode — and through it OpenRouter, Ollama and any OpenAI-compatible endpoint — or your own), spending that provider's quota instead of your Anthropic quota. Includes a deterministic multi-provider benchmark to decide what each model can be trusted with, and a permission policy that lets an agent write and test while git history stays yours.",
       "version": "0.9.0",
       "author": {
         "name": "Marcelo"

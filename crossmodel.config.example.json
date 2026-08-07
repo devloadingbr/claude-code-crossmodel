@@ -10,5 +10,12 @@
     "gem":   { "provider": "gemini", "model": "gemini-2.5-pro" }
   },
 
-  "_comment_providers": "Adding a NEW provider needs an args() builder, which JSON cannot express — it belongs in bench/providers.mjs as a pull request. Built in: codex, gemini, ollama, claude."
+  "_comment_providers": "Adding a NEW provider needs an args() builder, which JSON cannot express — it belongs in bench/providers.mjs as a pull request. Built in: codex, opencode, gemini, ollama, claude.",
+
+  "_comment_opencode": "opencode is provider-neutral: it reaches OpenRouter, Ollama, OpenAI, Google and anything OpenAI-compatible through one adapter, so the model string is 'provider/model' as opencode spells it. Run 'opencode models' to see what your install offers. It supports --write under the permission policy in ~/.claude/crossmodel/permissions.json.",
+
+  "_example_opencode": {
+    "free":   { "provider": "opencode", "model": "opencode/deepseek-v4-flash-free" },
+    "router": { "provider": "opencode", "model": "openrouter/deepseek/deepseek-v3" }
+  }
 }

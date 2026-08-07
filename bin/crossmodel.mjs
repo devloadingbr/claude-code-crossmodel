@@ -191,7 +191,9 @@ Options:
                      leaves half-applied edits with no rollback, so values under 600000
                      are refused rather than risked.
   --schema <path>    JSON Schema for structured output (only providers whose CLI
-                     supports it, e.g. codex; silently ignored elsewhere)
+                     supports it, e.g. codex. Elsewhere it is dropped with a
+                     warning on stderr — never silently, or you would trust a shape
+                     nothing enforced)
   --list             show which models are usable here, then exit
   --quiet            print only the answer, no stderr diagnostics
   --no-stream        do not report progress; wait in silence and print only the answer.
@@ -330,8 +332,28 @@ if (worktree) {
       process.exit(1);
     }
     if (!has('quiet')) console.error(`crossmodel: worktree ${dir} on branch ${branch}`);
-  } else if (!has('quiet')) {
-    console.error(`crossmodel: reusing existing worktree ${dir}`);
+  } else {
+    // 🔴 An existing directory was being trusted on its name alone. `--worktree ~/Documents`
+    // would have been announced as "reusing existing worktree" and then handed to the agent
+    // as a write target — a flag whose entire purpose is isolation, silently delivering an
+    // arbitrary directory. Verify, or refuse.
+    const gitDir = spawnSync('git', ['-C', dir, 'rev-parse', '--git-dir'], { encoding: 'utf8' });
+    const commonDir = spawnSync('git', ['-C', dir, 'rev-parse', '--git-common-dir'], { encoding: 'utf8' });
+    if (gitDir.status !== 0) {
+      console.error(`crossmodel: ${dir} already exists and is not a git worktree. Refusing to write there —`);
+      console.error('  --worktree promises isolation, and an ordinary directory does not provide it.');
+      console.error('  Remove it, pick another path, or pass --cwd if you really mean that directory.');
+      process.exit(1);
+    }
+    // A LINKED worktree has .git pointing elsewhere, so these two differ. When they match,
+    // this is the main checkout — writing there is precisely what --worktree exists to avoid.
+    const isLinked = path.resolve(dir, gitDir.stdout.trim()) !== path.resolve(dir, commonDir.stdout.trim());
+    if (!isLinked) {
+      console.error(`crossmodel: ${dir} is the main checkout, not a linked worktree. Refusing —`);
+      console.error('  this is the tree you are working in, which is the one --worktree is meant to protect.');
+      process.exit(1);
+    }
+    if (!has('quiet')) console.error(`crossmodel: reusing existing worktree ${dir}`);
   }
   cwd = dir;
 
@@ -419,6 +441,24 @@ const MARK = {
 // fine. So silence itself gets reported.
 const HEARTBEAT_MS = 60_000;
 let lastEventAt = Date.now();
+/**
+ * A cheap fingerprint of everything git can see change in `dir`, including untracked
+ * files. Returns null when there is nothing to compare against — outside a git repo — and
+ * null must be read as "unknown", never as "unchanged".
+ */
+function treeSignature(dir) {
+  if (!dir) return null;
+  const run = (args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', timeout: 15_000 });
+  if (run(['rev-parse', '--git-dir']).status !== 0) return null;
+  // --porcelain covers modified, staged, deleted and untracked. HEAD catches the case of
+  // an agent that committed despite being told not to: history moved even if the tree
+  // looks identical afterwards.
+  const status = run(['status', '--porcelain', '--untracked-files=all']);
+  const head = run(['rev-parse', 'HEAD']);
+  if (status.status !== 0) return null;
+  return `${head.stdout ?? ''} ${status.stdout ?? ''}`;
+}
+
 let filesWritten = 0;
 const heartbeat = setInterval(() => {
   const quietFor = Date.now() - lastEventAt;
@@ -447,6 +487,11 @@ if (reportProgress || logPath) {
   if (resume) bits.push(`resume: ${resume}`);
   say(`crossmodel: ${bits.join(' · ')} in ${cwd ?? process.cwd()}`);
 }
+
+// Snapshot for the no-op check below. Only providers with an event stream can report
+// edits as they happen; for the rest the tree itself has to be asked. Cheap, and it runs
+// before the model does anything.
+const treeBefore = write ? treeSignature(cwd) : null;
 
 const r = await callModel(alias, prompt, {
   timeoutMs,
@@ -494,7 +539,28 @@ process.stdout.write(r.text);
 // a blocker and correctly refused to fake progress. That happened here: a phase stopped
 // because the schema it needed did not exist, and returned exit 0. Anything automating on
 // top of this would have read that as "done". Success and no-op must not share a code.
-if (write && r.streamed && filesWritten === 0) {
-  console.error('crossmodel: the run succeeded but wrote NO files — read the answer before treating this as done.');
-  process.exit(3);
+//
+// Two ways to know, because the first only works for some providers:
+//   - the event stream counted the edits (codex);
+//   - otherwise compare the tree before and after (opencode and anything else without a
+//     stream). Gating this on r.streamed alone meant a no-op silently exited 0 for every
+//     provider that has no event output — the exact hole this check exists to close.
+if (write) {
+  const wroteNothing = r.streamed
+    ? filesWritten === 0
+    : treeBefore !== null && treeSignature(cwd) === treeBefore;
+
+  if (wroteNothing) {
+    console.error('crossmodel: the run succeeded but wrote NO files — read the answer before treating this as done.');
+    process.exit(3);
+  }
+
+  // Not knowing is its own outcome and must not read as "it wrote something". Happens when
+  // the target is outside a git repo, so there is nothing cheap to diff against.
+  if (!r.streamed && treeBefore === null) {
+    console.error(
+      `crossmodel: could not verify whether any file changed — "${r.provider}" reports no events and ${cwd} is not a git repo.\n` +
+      '  Check the tree yourself before treating this as done.',
+    );
+  }
 }

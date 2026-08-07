@@ -34,7 +34,8 @@ you trust anything on stdout:**
 |---|---|---|
 | `0` | success | proceed |
 | `1` | usage error (unknown alias, empty prompt) | fix your invocation and retry once |
-| `2` | the call failed (provider down, timeout, no credentials, non-zero exit) | report `status: failed` with the stderr text |
+| `2` | the call failed (provider down, timeout, no credentials, non-zero exit, or a zero exit with an empty answer) | report `status: failed` with the stderr text |
+| `3` | a `--write` run that succeeded and changed **no file** | do NOT report it as done. Read the answer: the agent usually hit a blocker and correctly refused to fake progress |
 
 Never forward an error message as if it were a finding. A review that did not happen must
 be reported as not having happened.
@@ -108,19 +109,30 @@ Three rules around it, and they are not negotiable:
    commit."* The caller reviews the diff against the other slices in flight and the
    original intent — a view you do not have and the external model has even less of.
    While a change sits in the working tree it is a diff; after a commit it is a fact.
-2. **Prefer an isolated scope.** A `git worktree` is ideal. `--write` confines edits to
-   `--cwd` (verified: outside paths are rejected), but pointing it at the live checkout
-   means two agents in one tree. Ask the caller for a worktree if the task is big.
+2. **Prefer an isolated scope.** A `git worktree` is ideal, and `--worktree <dir>` builds
+   one for you. How well `--cwd` is confined depends on the provider, and the difference
+   matters: **codex** enforces it with an OS sandbox — a write outside fails at the
+   syscall, whatever the model intends. **opencode** enforces it with a permission policy;
+   strong, but applied in process, so treat it as a strong boundary rather than a
+   guarantee. Either way, pointing at the live checkout means two agents in one tree — ask
+   the caller for a worktree if the task is big, and route anything that must not touch the
+   tree to a sandboxed provider.
 3. **Report the diff, don't summarise it away.** After a write run, list every file
    touched. The caller cannot review what you did not mention.
 
-Never use `danger-full-access` or any bypass flag. Network is blocked in both sandbox
-modes, which is what makes a write run recoverable — nothing can be pushed or deployed
-from inside it.
+Never use `danger-full-access` or any bypass flag. Network is **off by default**, which is
+what makes a write run recoverable — nothing can be pushed or deployed from inside it.
+`--network` turns it on and requires `--write`; reach for it only when the agent must run
+verification that genuinely needs it, such as a suite that talks to a local database, and
+never on a tree holding secrets.
+
+## Reporting back
+
+1. **Check the exit code first.** See the table above. Never forward an error as a finding.
 2. **Filter the output.** Drop praise, style notes, and generic advice. Forward only
    concrete findings with an anchor.
-3. **Mark what cannot be verified.** The external model never saw the repo, so any claim
-   it makes about your codebase is a hypothesis, not a fact.
+3. **Mark what cannot be verified.** A model that ran without `--cwd` never saw the repo,
+   so any claim it makes about your codebase is a hypothesis, not a fact.
 4. **One call at a time unless the caller asked for a batch.** Quota is finite and shared.
 
 ## Output format (required)

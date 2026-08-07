@@ -11,7 +11,7 @@
     ["Sweep the repo: where is X, which files touch Y", "`delegate` with luna + --cwd — agentic CLIs read the tree themselves"],
     ["Investigate / diagnose across the repo", "`delegate` with luna + --cwd, then opus confirms the conclusion"],
     ["Filter candidates in a broad sweep", "luna filters, opus confirms"],
-    ["Implement inside the existing codebase (writing files)", "sonnet subagent — external models are read-only by design here"],
+    ["Implement inside the existing codebase (writing files)", "external CLI with --write in a worktree, or a sonnet subagent when the change needs this conversation's context"],
     ["Read a lot, conclude a little", "ALWAYS a subagent — the win is the context that never enters yours"],
     ["Final review, subtle defect, security", "opus, main loop  [only model stable at 100% across runs]"],
     ["Trade-off that is expensive to reverse", "opus, main loop"],
