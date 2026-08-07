@@ -295,6 +295,9 @@ function runCli(bin, args, timeoutMs, cwd, onLine) {
         ok: code === 0,
         ms: Date.now() - t0,
         text: out,
+        // Kept even on success: a provider can exit 0 and still have said something on
+        // stderr that explains an empty answer. Discarding it there loses the diagnosis.
+        stderr: err,
         error: code === 0 ? null : `exit ${code}: ${err.slice(0, 300)}`,
       });
     });
@@ -411,6 +414,31 @@ export async function callModel(alias, prompt, opts = {}) {
   // Falling back to the raw stdout when nothing parsed keeps a protocol change from
   // silently turning a successful run into an empty answer.
   const text = stream && answer.length ? answer.join('\n\n').trim() : r.text;
+
+  // 🔴 EXIT 0 WITH NO ANSWER IS NOT SUCCESS.
+  // Measured against opencode 1.18.14: ask it for something its permission layer refuses
+  // and it prints the denial ("permission requested: external_directory; auto-rejecting")
+  // to STDERR, writes nothing to stdout, and exits 0. crossmodel read the empty stdout as
+  // the answer and reported a successful run — a blocked call and a working one were
+  // indistinguishable, which is the exact failure this project exists to prevent.
+  // The denial is not lost, it is just on the other stream; surface it as the reason.
+  if (r.ok && !String(text).trim()) {
+    const diag = String(r.stderr ?? '').trim();
+    return {
+      ...r,
+      ok: false,
+      text: '',
+      error:
+        `exited 0 but produced no answer after ${r.ms}ms` +
+        (diag
+          ? `. The provider said this on stderr:\n  ${diag.slice(0, 600).replace(/\n/g, '\n  ')}`
+          : ' and wrote nothing to stderr either — the run may have been blocked or cut short.'),
+      streamed: stream,
+      model: entry.model,
+      provider: entry.provider,
+    };
+  }
+
   return { ...r, text, streamed: stream, model: entry.model, provider: entry.provider };
 }
 

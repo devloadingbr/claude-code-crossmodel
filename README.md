@@ -66,6 +66,11 @@ The alias hides which binary it is, so nothing downstream cares.
 A failed call still produces text, and text looks like an answer — anything consuming
 this must check the exit code first.
 
+**Exit 0 with an empty answer counts as a failure**, and the provider's stderr comes back
+with it. A CLI can refuse a tool call, explain itself on stderr, write nothing to stdout
+and still exit 0 — leaving a blocked run and a working one indistinguishable. Silence is
+never reported as a result here.
+
 #### Repo sweeps — the part worth stealing
 
 ```bash
