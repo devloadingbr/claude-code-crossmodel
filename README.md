@@ -1,6 +1,6 @@
 # crossmodel
 
-**Delegate work from Claude Code to another agentic CLI — and know which models you can trust with what.**
+**Delegate work from Claude Code to another agentic CLI — they write, you review and commit.**
 
 Claude Code is excellent at orchestrating. It is also the only thing spending your
 Anthropic quota. `crossmodel` hands work to an external agentic CLI — OpenAI's Codex, xAI's
@@ -50,8 +50,9 @@ curl -fsSL https://x.ai/cli/install.sh | bash
 account, and the shipped `flash` alias uses one. It is also provider-neutral, so the same
 binary later reaches OpenRouter, Ollama or any OpenAI-compatible endpoint.
 
-**Codex** is the one with an OS sandbox, so it is where write-heavy work belongs. It bills
-to a ChatGPT subscription rather than a metered API key.
+**Codex** is the one whose OS sandbox makes `.git/` read-only, so a `--write` run can
+edit and cannot commit. Writing itself is not reserved for it. It bills to a ChatGPT
+subscription rather than a metered API key.
 
 **Grok Build** is documented by xAI as an agentic CLI. 🟡 Documentation-only, not measured
 here (docs.x.ai/build, read 2026-08-12). It needs a SuperGrok or X Premium+ subscription;
@@ -63,7 +64,20 @@ Prefer to configure by hand? Copy `crossmodel.config.example.json` to
 `~/.claude/crossmodel/crossmodel.config.json`. The setup skill just does this for you, with
 verification. The home-directory file is checked first; a plugin-local
 `crossmodel.config.json` remains a legacy fallback. Do not put the working copy next to
-`bench/providers.mjs`: plugin updates replace the versioned plugin directory.
+`lib/providers.mjs`: plugin updates replace the versioned plugin directory.
+
+---
+
+## Package and tests
+
+The production runtime had no business living in a folder called `bench`, and it blocked
+packaging, so `bench/providers.mjs` moved to `lib/providers.mjs`. The npm package is
+`crossmodel-cli`: a real `bin` entry, zero dependencies, and `npm test`. 48 tests run
+under `node --test` (the script is `node --test test/*.test.mjs` — on Node 22 a bare
+directory argument discovers nothing). CI runs the tests plus `node --check` over every
+tracked `.mjs`. The suite caught a bug the same day it was written, where rewriting a
+comment deleted the line emitting `--force` and `--mode ask` for Cursor, which would have
+made a write run hang and a sweep silently writable.
 
 ---
 
@@ -213,7 +227,7 @@ is not a plugin's decision to make.
 
 The block stays short deliberately. `CLAUDE.md` is loaded into every session, so each line
 is a tax on every turn forever; it carries only what cannot be inferred from the code —
-exit-code semantics, which provider is genuinely sandboxed, and who commits.
+exit-code semantics, that the git rule is a contract, and who commits.
 
 ---
 
@@ -242,18 +256,20 @@ function and nowhere near enough to judge whether it belongs.
 with its own definition of "done" and its own appetite for adjacent cleanup — unlike a
 Claude subagent, which runs under this harness's rules. That's a scoping problem, not a
 reason to forbid writing, so `--write` requires an explicit `--cwd` and asks the provider to
-scope edits to it. The strength of that scope differs by provider. Point it at a `git
-worktree` and two agents can work at once without meeting.
+scope edits to it. The git rule is a contract a cooperating agent honours, not a lock —
+`codex` is the only provider that enforces it in the kernel. Point `--write` at a `git
+worktree` and two agents can work at once without meeting; that isolation is also what
+makes reviewing the diff cheap.
 
 Verified, not assumed for codex: with `--write`, edits inside the directory succeed and
 edits outside are rejected (`patch rejected: writing outside of the project`); `.git/` is
 read-only. Grok Build's OS sandbox is documented, not measured here — see below. OpenCode's
-policy narrows the shell hole but is not a boundary. Network is blocked by default in both
-measured codex modes, so nothing can push, deploy, or call a webhook — and it stays that
-way unless you pass `--network`, which requires `--write` and exists so an agent can run a
-test suite that talks to a local service. Opening it is a real widening of scope: with
-network on, "cannot call a webhook" no longer holds. Grant it when you want the agent's
-work verified, not by default.
+policy is not a sandbox. Network is blocked by default in both measured codex modes, so
+nothing can push, deploy, or call a webhook — and it stays that way unless you pass
+`--network`, which requires `--write` and exists so an agent can run a test suite that
+talks to a local service. Opening it is a real widening of scope: with network on, "cannot
+call a webhook" no longer holds. Grant it when you want the agent's work verified, not by
+default. After a `--write` run, read `git -C <dir> log` as well as the diff.
 
 `--cwd` is resolved to an absolute path and checked for existence before any provider is
 spawned. This closes a bug where a relative directory was resolved twice — `--cwd lib`
@@ -476,7 +492,7 @@ it, or do it by hand:
 `crossmodel.config.json` lives at `~/.claude/crossmodel/crossmodel.config.json` first.
 The plugin directory is a legacy fallback only; a config stored there is lost when the
 versioned plugin path is replaced during an update. Add aliases in the home-directory
-file, not next to `bench/providers.mjs`.
+file, not next to `lib/providers.mjs`.
 
 ```json
 {
@@ -489,7 +505,7 @@ file, not next to `bench/providers.mjs`.
 
 **A new provider** needs an `args()` builder — how to turn `(model, prompt, cwd, write)`
 into that CLI's argument list — which JSON can't express. It belongs in
-`bench/providers.mjs` as a pull request. It is about ten lines; see `codex` for the shape,
+`lib/providers.mjs` as a pull request. It is about ten lines; see `codex` for the shape,
 including how a sandbox flag maps to `write`.
 
 Built in: `codex`, `grok`, `cursor`, `opencode`, `gemini`, `ollama`, and `claude` (as the
@@ -507,16 +523,18 @@ headless authentication uses `XAI_API_KEY`.
 crossmodel ships one alias: `grok` → `grok-build-0.1`. Run `grok models` to list the rest
 and add another model through `crossmodel.config.json`.
 
-Grok is the second provider here with a real OS sandbox: Landlock on Linux and Seatbelt on
-macOS. It therefore belongs in codex's confinement tier, not OpenCode's. crossmodel passes
-`--sandbox read-only` for a sweep, `--sandbox strict` for `--write` (writes and reads are
-confined to `--cwd`, and child network is blocked), and `--sandbox workspace` for
-`--write --network` (network is allowed and reads widen).
+Grok's documented sandbox is Landlock on Linux and Seatbelt on macOS. crossmodel passes
+`--sandbox read-only` for a sweep and `--sandbox workspace` for `--write`. `workspace` is
+the profile xAI's own docs label normal development. `strict` also confines reads to the
+cwd, which stops an agent reading a sibling package or a global config and buys nothing
+the diff review does not already cover.
 
-Two caveats matter. Child-network blocking is Linux-only; on macOS it is a no-op for
-read-only and strict. Unlike codex, Grok leaves `.git/` writable, so a Grok `--write` run
-can commit — review `git log` as well as the diff. Streaming progress is not wired up for
-Grok because its streaming-JSON event schema is undocumented.
+`workspace` allows network unconditionally, and no profile writes to the cwd with network
+blocked, so crossmodel **refuses `--network` for grok** rather than accepting a flag it
+cannot honour. Child-network blocking under read-only is Linux-only; on macOS it is a
+no-op. Grok leaves `.git/` writable, so the git rule is a contract, not a lock — after a
+`--write` run, review `git -C <dir> log` as well as the diff. Streaming progress is not
+wired up for Grok because its streaming-JSON event schema is undocumented.
 
 ### OpenCode: one harness, many backends
 
@@ -531,25 +549,28 @@ Write tool is checked. The same path inside `printf 'x' > /outside/file` is not 
 permission layer that is just "run a command". Measured against opencode 1.18.14, with no
 `--auto`: the first was refused, the second succeeded.
 
-An **allowlist narrows that hole and removes the easy paths; it does not close it**.
-OpenCode matches a command by its leading word, so any allowlisted command that can
-redirect or execute carries the hole: `echo`, `cat`, `sed -i`, `awk`, and `find -exec` are
-allowed unconditionally, while `node -e` and `python3 -c` are allowed under `--write` and
-provide arbitrary execution. In a measurement on 2026-08-12, with the policy in force,
-`echo BACKUP > /outside/file` from the agent shell exited 0 and overwrote a file outside
-the workspace; `cat` of that same path was refused as `external_directory`.
+The policy used to be an allowlist with `"*": "ask"` as the floor. That is gone, for two
+reasons.
 
-The shipped default is the house rule as configuration — let the agent work, keep what is
-the orchestrator's:
+It blocked ordinary work. In a non-interactive run, `ask` with nobody to ask is a
+refusal, so an agent could not run a build tool nobody had listed, and an agent that
+cannot run the suite hands back code nobody has run.
+
+It stopped nothing. MEASURED 2026-08-12, with that policy in force, `echo BACKUP >
+/outside/file` from the agent shell exited 0 and overwrote a file outside the workspace,
+while `cat` of that same path was refused, because OpenCode matches a command by its
+leading word.
+
+The shipped default is the house rule as configuration — the agent works, git history
+stays the orchestrator's:
 
 | | |
 |---|---|
-| read, search, `git diff/log/status` | allow |
+| bash (`*`) | allow |
+| `git diff/log/status` and the other reading verbs | allow (named, so a broader user rule cannot sweep them away with the writes) |
 | edit inside the working dir | allow with `--write` |
-| `npm test`, `tsc`, `cargo`, build tools | allow with `--write` |
-| `git commit`, `push`, `reset`, `rebase`, `checkout` | **deny** — what enters history is yours |
-| `rm`, `sudo`, `curl`, `ssh`, package installers | **deny** |
-| anything else | `ask` → refused |
+| `git commit`, `push`, `reset`, `rebase`, `checkout` and the other writing verbs | **deny** — what enters history is yours |
+| `webfetch` | deny — reaching the network is `--network`'s decision, not the policy's |
 
 Override it in `~/.claude/crossmodel/permissions.json`.
 
@@ -562,7 +583,6 @@ Verified end to end, not assumed — with the policy active, in a `--write` run:
 | `echo BACKUP > /outside/file` via the **shell** | 🔴 exited 0 and overwrote a file outside the workspace (measured 2026-08-12) |
 | `cat /outside/file` via the **shell** | 🔒 refused as `external_directory` |
 | Edit a file, then `git commit` | ✅ edited · 🔒 commit refused |
-| `rm` a file | 🔒 blocked |
 | `git diff --stat` | ✅ still works |
 | A repo shipping `opencode.json` with `"permission":"allow"` | 🔒 cannot override |
 
@@ -571,21 +591,17 @@ That last row is why the policy travels as `OPENCODE_CONFIG_CONTENT` and not
 latter, so a repo you do not control could hand itself full permissions. The inline form
 loads after the project config and wins.
 
-⚠️ Still enforced in process, by OpenCode. The allowlist is much stronger than nothing,
-but `"confined to --cwd"` is a strong convention, not a boundary: the policy does not
-prevent every allowlisted shell command from redirecting or executing. The real boundary
-is the orchestrator reviewing the diff before committing. Codex fails an out-of-scope write
-at the syscall; Grok's documented OS sandbox is described above, but unlike codex its
-`.git/` remains writable.
+⚠️ Still enforced in process, by OpenCode. The git denial is a contract a cooperating
+agent honours, not a lock: `git commit` reached through `sh -c` or `node -e` is not
+caught, and `"confined to --cwd"` is a strong convention, not a boundary. The protection
+which actually works is the orchestrator reviewing the diff before committing, and
+`--worktree` is what makes that review cheap. Codex is the one provider that enforces the
+git rule in the kernel — `.git/` is read-only inside its sandbox. Grok, Cursor and
+OpenCode are asked, not prevented.
 
 **One trap worth knowing if you script OpenCode yourself:** it does not take its working
 directory from the spawned process. With the child's cwd set to a target repo and the
 parent sitting in `/tmp`, it wrote `/tmp/NEW.txt`. `--dir` is what actually aims it.
-
-`env` is deliberately absent from the allowlist. The child inherits the full parent
-environment, so allowing `env` would print every API key in the shell into the answer (and
-into `--log` on disk); `env CMD` would also launder a denied command through an allowed
-leading word.
 
 ### Cursor: a fourth quota pool, and a harness
 
@@ -615,11 +631,19 @@ left untouched.
 
 **Measured, and important:** `--sandbox enabled` failed to start on stock Ubuntu with
 `Sandbox mode is enabled but not available on this system... possibly due to AppArmor
-configuration. Run agent sandbox disable to switch to allowlist mode`. crossmodel asks for
-the sandbox only under `--write` and lets that failure stand loudly; it does not fall back
-to Cursor's weaker allowlist mode. A run that quietly degrades to a weaker boundary than
-the caller believes is the exact failure this project exists to prevent. In practice,
-`cgrok` is excellent for sweeps and currently unavailable for `--write` on such a machine.
+configuration. Run agent sandbox disable to switch to allowlist mode`. crossmodel used to
+pass that flag under `--write` and let the failure stand, which meant it refused to write
+on a machine where the plain `agent` CLI writes fine.
+
+The cause is a gap in Cursor's own AppArmor profile, diagnosed from the kernel audit log
+on 2026-08-13: profile `cursor_sandbox_agent_cli` grants `sys_admin`, `setuid` and
+`setgid` but not `dac_override`, which `newuidmap` needs to write the namespace uid map.
+The machine was not locked down: plain `unshare --user --map-root-user` works there, and
+the IDE's separate `cursor_sandbox` profile is unaffected.
+
+A wrapper that forbids what the tool itself permits is a wrapper people route around.
+crossmodel therefore passes `--force` plus `--sandbox disabled`, which is Cursor's own
+default. `--write` works; it was verified writing a file in a real run.
 
 Cursor is a **harness**, like OpenCode: the alias names a model inside somebody else's
 agent loop.
@@ -643,25 +667,26 @@ discipline beat surface area: if it can't read your working directory, it's out.
 - **Only CLI-backed models see your repo.** Agentic CLIs read the tree when given
   `--cwd`; HTTP-backed models see nothing but the prompt text. Neither can see the
   *conversation*, so state the goal explicitly either way.
-- **Read-only is the default; `--write` is opt-in and provider-scoped.** codex enforces
-  `--cwd` in the kernel: an out-of-scope write fails, and `.git/` is read-only, so an agent
-  can edit and cannot commit no matter what it decides. Grok's documented Landlock/Seatbelt
-  sandbox puts it in the same broad tier, but it leaves `.git/` writable and has not been
-  measured here. Cursor is a harness whose sandbox is requested only under `--write`, and
-  whose failure to start is left loud rather than degraded to allowlist mode. OpenCode uses
-  the shipped permission policy in process: its allowlist narrows the hole and removes easy
-  paths, but is not a boundary. `echo`, `cat`, `sed -i`, `awk`, and `find -exec` remain
-  allowlisted, and under `--write` `node -e` and `python3 -c` are arbitrary execution. A
-  `permissions.json` that allows `git commit *` also undoes the commit denial — it is your
-  file. Treat `--cwd` as a strong convention there; the real boundary is the orchestrator
-  reviewing the diff before committing. Use a `git worktree` when two agents might
-  otherwise share a tree.
+- **Read-only is the default; `--write` is opt-in.** Every provider gets the same deal:
+  the agent reads, edits, runs the build and runs the tests inside the directory it was
+  given, and does not touch git history. Nothing else is withheld. That git rule is a
+  contract a cooperating agent honours, not a lock. `codex` is the only provider that
+  enforces it in the kernel — `.git/` is read-only inside its sandbox. `grok`, `cursor`
+  and `opencode` are asked, not prevented, and a shell can reach around any of them. So
+  verify rather than assume: after a `--write` run read `git -C <dir> log` as well as the
+  diff. The protection which actually works is the orchestrator reviewing the diff, and
+  `--worktree` is what makes that review cheap. OpenCode's permission layer is still
+  in-process: `echo BACKUP > /outside/file` from the agent shell exited 0 and overwrote a
+  file outside the workspace (measured 2026-08-12). A `permissions.json` that allows
+  `git commit *` also undoes the commit denial — it is your file.
 - **Read access is NOT confined to `--cwd`.** A delegated model can read anything your
-  user can — `.env`, `~/.aws/credentials`, shell history. By default it cannot send them
-  anywhere (network is off unless you pass `--network`, which itself requires `--write`),
-  but it *can* quote them back to you, and that answer lands in your transcript. Don't
-  point a sweep at a tree whose secrets you don't want repeated — and think twice before
-  combining `--network` with a tree that holds any.
+  user can — `.env`, `~/.aws/credentials`, shell history. It *can* quote them back to
+  you, and that answer lands in your transcript. On codex, network is off unless you
+  pass `--network` (which itself requires `--write`). A grok `--write` run uses the
+  `workspace` profile, which allows network unconditionally — `--network` is refused
+  there, and on cursor, rather than accepted as a flag neither can honour. Don't point
+  a sweep at a tree whose secrets you don't want repeated — and think twice before a
+  `--write` run, or `--network`, on a tree that holds any.
 - **Benchmark scores measure a pair, not a model.** `code` scores near-ceiling for most
   models *because a test suite runs underneath*. Remove the verifier and the number
   tells you nothing.
