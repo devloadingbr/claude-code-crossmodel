@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Cross-provider model routing for Claude Code",
-    "version": "0.10.0"
+    "version": "0.11.0"
   },
   "plugins": [
     {
       "name": "crossmodel",
       "source": "./",
-      "description": "Delegate work from Claude Code to any external LLM CLI (Codex, OpenCode — and through it OpenRouter, Ollama and any OpenAI-compatible endpoint — or your own), spending that provider's quota instead of your Anthropic quota. Includes a deterministic multi-provider benchmark to decide what each model can be trusted with, and a permission policy that lets an agent write and test while git history stays yours.",
-      "version": "0.10.0",
+      "description": "Delegate work from Claude Code to any external LLM CLI (Codex, Grok, Cursor, OpenCode — and through it OpenRouter, Ollama and any OpenAI-compatible endpoint — or your own), spending that provider's quota instead of your Anthropic quota. Includes a deterministic multi-provider benchmark to decide what each model can be trusted with, and a permission policy that lets an agent write and test while git history stays yours.",
+      "version": "0.11.0",
       "author": {
         "name": "Marcelo"
       },
@@ -27,7 +27,10 @@
         "gemini",
         "ollama",
         "benchmark",
-        "quota"
+        "quota",
+        "grok",
+        "xai",
+        "cursor"
       ]
     }
   ]

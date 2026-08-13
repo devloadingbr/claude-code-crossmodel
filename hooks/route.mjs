@@ -12,10 +12,13 @@
 // Precedence: $CROSSMODEL_ROUTING > ./routing.json (plugin root) > built-in default.
 
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { readMode, clearMode, describeUntil, USER_ROUTING_PATH } from '../lib/mode.mjs';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// fileURLToPath, not `new URL(...).pathname` — the latter is percent-encoded, so a plugin
+// path containing a space silently resolves to a directory that does not exist.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // The trigger requires a leading '#'. Do not drop it: bare words like "route" collide
 // with everyday vocabulary ("fix the /api route") and the hook would fire constantly.
@@ -54,7 +57,21 @@ function loadPolicy() {
   for (const p of candidates) {
     if (!existsSync(p)) continue;
     try {
-      return { ...BUILT_IN, ...JSON.parse(readFileSync(p, 'utf8')), source: p };
+      const raw = JSON.parse(readFileSync(p, 'utf8'));
+      // Syntax was already guarded; SHAPE was not, and that is the gap that mattered.
+      // `{"rules": {}}` is valid JSON, reaches `policy.rules.map` in render(), throws, and
+      // kills the hook on EVERY prompt — a file the user is invited to hand-edit taking
+      // down the harness integration until they work out why.
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { ...BUILT_IN, parseError: `${path.basename(p)}: expected a JSON object` };
+      }
+      if (raw.rules !== undefined && !(Array.isArray(raw.rules) && raw.rules.every((r) => Array.isArray(r) && r.length >= 2))) {
+        return { ...BUILT_IN, parseError: `${path.basename(p)}: "rules" must be an array of [situation, route] pairs` };
+      }
+      if (raw.unused !== undefined && !Array.isArray(raw.unused)) {
+        return { ...BUILT_IN, parseError: `${path.basename(p)}: "unused" must be an array` };
+      }
+      return { ...BUILT_IN, ...raw, source: p };
     } catch (e) {
       // A malformed policy must not silently fall back to defaults — that would be the
       // exact failure mode this plugin exists to prevent.
@@ -174,9 +191,16 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
+  // A broken mode.json must not take #route down with it. The `expired` branch above
+  // carefully preserves the injection when the trigger was used; this one dropped it, so a
+  // one-character typo in an unrelated state file silently disabled a feature that has
+  // nothing to do with saver mode.
   if (mode.error) {
     process.stdout.write(JSON.stringify({
       systemMessage: `🔴 crossmodel: ${mode.error} — saver mode is NOT active. Fix the file or run \`crossmodel mode off\`.`,
+      ...(triggered && {
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: render(policy) },
+      }),
     }));
     process.exit(0);
   }

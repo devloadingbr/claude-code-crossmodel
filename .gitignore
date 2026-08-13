@@ -1,6 +1,10 @@
 # Benchmark output — machine- and run-specific, never commit
 bench/results/
 
+# Internal working documents — Portuguese, house-only, and this repo is public
+AUDITORIA.md
+ROADMAP-ANALISE.md
+
 # User config — everyone's registry and policy differ
 crossmodel.config.json
 routing.json

@@ -10,10 +10,17 @@
 
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadPolicy as loadPermissions } from '../lib/permissions.mjs';
+import { USER_DIR } from '../lib/mode.mjs';
 
-const ROOT = path.dirname(new URL(import.meta.url).pathname);
+// ⚠️ fileURLToPath, never `new URL(...).pathname`. A URL pathname is percent-encoded, so a
+// plugin installed under a directory containing a space resolves to ".../my%20dir/..." —
+// a path that does not exist. The failure is silent: existsSync says no, the loop moves on,
+// and the user's config is ignored without a word. (It also breaks on Windows, where
+// pathname yields "/C:/...".)
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------- providers
 //
@@ -166,15 +173,21 @@ export const BUILTIN_PROVIDERS = {
   //     command string is invisible to it.
   //   - --auto removes even the first guard: a file outside the workspace was overwritten.
   //
-  // Write is nonetheless available, because the hole has a shape and the shape has a fix:
-  // an allowlist. crossmodel injects a bash policy whose floor is `"*": "ask"`, and in a
-  // non-interactive run there is nobody to ask, so an unrecognised command is refused.
-  // That puts the shell back under the same policy as the file tools. See lib/permissions.
+  // crossmodel injects a bash allowlist whose floor is `"*": "ask"`, which in a
+  // non-interactive run means refused. That removes the easy paths. It does NOT close the
+  // hole, and saying otherwise here was wrong for several releases:
   //
-  // ⚠️ Enforced by OpenCode, in process — strong, and still not codex. codex fails the
-  // write at the syscall regardless of what the model decides. Route work that must not
-  // touch the tree to codex; route work that benefits from OpenRouter's model catalogue
-  // here, and review the diff either way.
+  //   MEASURED 2026-08-12, with the policy in force: `echo BACKUP > /outside/file` from
+  //   the agent's shell exited 0 and overwrote a file outside the workspace. A `cat` of
+  //   that same path WAS refused as external_directory — the guard sees paths it is
+  //   handed, and a path inside a command string is not handed to it.
+  //
+  // ⚠️ So --write here means "the agent was asked to stay inside --cwd, and the easy ways
+  // out are blocked" — a strong convention, not a boundary. Write is still offered because
+  // the orchestrator reviews the diff before anything is committed, and because OpenRouter's
+  // catalogue arrives through this adapter and nothing else. Route work that MUST NOT touch
+  // the tree to codex or grok, whose sandboxes fail the write at the syscall.
+  // See lib/permissions.mjs for the full list of allowlisted commands that carry the hole.
   opencode: {
     kind: 'cli',
     bin: 'opencode',
@@ -220,6 +233,146 @@ export const BUILTIN_PROVIDERS = {
     },
   },
 
+  // xAI Grok Build. A third quota pool (SuperGrok / X Premium+), and the SECOND provider
+  // here whose boundary is a real OS sandbox rather than a policy: Landlock on Linux,
+  // Seatbelt on macOS. That puts it in codex's tier, not opencode's.
+  //
+  // 🟡 ARGUMENT SHAPE IS FROM THE PUBLISHED DOCS (docs.x.ai/build, read 2026-08-12), NOT
+  // FROM A RUN. The CLI is not installed on the machine this was written on, so unlike the
+  // codex and opencode entries nothing here is measured. Verify before trusting it:
+  //   crossmodel --model grok --cwd /tmp/probe "List the files you can see."
+  // Everything marked UNVERIFIED below is a specific thing to check while you are there.
+  grok: {
+    kind: 'cli',
+    bin: 'grok',
+    supportsSchema: false,
+    supportsWrite: true,
+    // UNVERIFIED: `--output-format streaming-json` exists and emits newline-delimited
+    // events, but the event schema is not documented, and a guessed parseEvent would
+    // silently drop the answer. Left off until someone captures real output and writes
+    // parseEvent against it — crossmodel degrades to the tree-diff no-op check meanwhile.
+    supportsStream: false,
+    supportsEffort: true,
+    supportsNetwork: true,
+    supportsResume: true,
+    args: ({ model, prompt, cwd, write, effort, network, resume }) => {
+      const a = ['-p', prompt, '-m', model];
+      // 🔴 --sandbox IS OFF BY DEFAULT in grok ("off: Unrestricted / Unrestricted"). Not
+      // passing it would hand an agent unrestricted write over the whole filesystem while
+      // crossmodel's own flags claim the opposite. It is never optional here.
+      //   read-only  reads everywhere, writes only ~/.grok and temp, child network blocked
+      //   strict     reads and writes confined to CWD, child network blocked
+      //   workspace  writes CWD + ~/.grok + temp, reads everywhere, network ALLOWED
+      // `strict` is the write default because crossmodel's contract is "confined to --cwd,
+      // no network"; `workspace` is the only profile that grants network, so --network
+      // selects it and thereby also widens reads. Say that, do not hide it.
+      //
+      // ⚠️ Child-network blocking is enforced on LINUX ONLY — on macOS it is a no-op for
+      // read-only and strict. On a Mac, "network: off" is a statement about intent, not a
+      // boundary.
+      a.push('--sandbox', write ? (network ? 'workspace' : 'strict') : 'read-only');
+      // Headless permission mode is "ask", and with no TTY there is nobody to ask, so every
+      // tool call would be refused and the run would come back empty. The sandbox is the
+      // boundary here — same bargain codex makes with workspace-write — so approval inside
+      // it is granted rather than negotiated.
+      if (write) a.push('--always-approve');
+      // Required in scripts: without it the CLI runs a background update check.
+      a.push('--no-auto-update', '--no-alt-screen');
+      if (cwd) a.push('--cwd', cwd);
+      if (effort) a.push('--effort', effort);
+      if (resume) a.push(...(resume === 'last' ? ['--continue'] : ['--resume', resume]));
+      return a;
+    },
+    // 🔴 KNOWN GAP — grok CAN COMMIT, and codex cannot.
+    // codex makes `.git/` read-only inside workspace-write, which is what enforces the
+    // house rule "delegated models never commit" at the syscall. grok's `strict` profile
+    // makes the whole CWD writable, `.git/` included. The CLI does have `--deny <RULE>`
+    // for this, but the rule syntax is undocumented on the pages consulted and a guessed
+    // rule that silently matches nothing is worse than no rule — it would read as a
+    // boundary while being decoration.
+    // Until the syntax is verified against a real install: review `git -C <dir> log` after
+    // a grok --write run, not just the diff.
+  },
+
+  // Cursor CLI. A fourth quota pool: the Cursor subscription, which is metered separately
+  // from Anthropic's, OpenAI's and xAI's — and which carries models from all of them, so
+  // one subscription here can reach Grok, GPT and Claude without a second bill.
+  //
+  // Worth being clear about what this is NOT: Cursor is a harness, like opencode. The
+  // alias names a model inside somebody else's agent loop, and the boundary is whatever
+  // that loop enforces. Run `agent --list-models` to see what your plan actually offers;
+  // do not invent model strings.
+  //
+  // Argument shape verified against `agent --help` on 2026.08.11-e8db854. What a run has
+  // NOT yet confirmed is the behaviour: whether `--mode ask` really refuses an edit, and
+  // whether `--sandbox enabled` actually holds a write inside --workspace. Until it does,
+  // treat the confinement claim as documentation.
+  cursor: {
+    kind: 'cli',
+    // ⚠️ The binary really is called `agent`, which is about as generic as a name on PATH
+    // can get. If something else on this machine owns that name, override `bin` in
+    // crossmodel.config.json rather than renaming anything system-wide.
+    bin: 'agent',
+    supportsSchema: false,
+    supportsWrite: true,
+    // UNVERIFIED: `--output-format stream-json` exists, its event schema does not appear in
+    // the docs. Off until someone captures real output — a guessed parser drops answers.
+    supportsStream: false,
+    // 🟡 Cursor DOES have reasoning effort — it is just not a flag. The tier is baked into
+    // the model id (`cursor-grok-4.6-low` … `-xhigh`, each with an optional `-fast`), which
+    // `agent --list-models` spells out. `--model 'name[effort=high]'` is also accepted for
+    // "parameterized" models, but which ids qualify is not stated anywhere, and a bracket
+    // on a model that does not take one is an error at the worst moment.
+    // So --effort is announced as unsupported and REFUSED rather than dropped: pick the
+    // tier by choosing the alias. A silently ignored --effort would mean believing a run
+    // reasoned harder than it did, which is worse than an error because you act on it.
+    supportsEffort: false,
+    // 🔴 --sandbox takes `enabled` or `disabled` and nothing else — there is no network
+    // knob and no read-only/strict distinction. "Read-only with network" and "write without
+    // network" are simply not expressible here, so --network is refused rather than
+    // accepted and ignored.
+    supportsNetwork: false,
+    supportsResume: true,
+    args: ({ model, prompt, cwd, write, resume }) => {
+      const a = ['-p'];
+      // 🔴 `-p` IS NOT READ-ONLY. The parameter reference is explicit: it "has access to all
+      // tools, including write and shell". A sweep would therefore be writable unless the
+      // mode says otherwise, which is the opposite of every other provider here. `ask` is
+      // Cursor's read-only mode; passing it is not optional.
+      if (write) a.push('--force'); else a.push('--mode', 'ask');
+      // 🔴 --sandbox IS ONLY ASKED FOR UNDER --write, AND ITS FAILURE IS LEFT LOUD.
+      // MEASURED 2026-08-13 on Ubuntu: `--sandbox enabled` refuses to start at all —
+      // "Sandbox mode is enabled but not available on this system. Sandbox failed to
+      // start, possibly due to AppArmor configuration… Run 'agent sandbox disable' to
+      // switch to allowlist mode." So Cursor's sandbox is not something you can assume is
+      // there; on a stock Linux desktop it is not.
+      //
+      // The response is deliberately NOT to drop the flag and carry on. A --write run that
+      // quietly falls back to allowlist mode is opencode's tier while the caller believes
+      // it is codex's, and that specific gap between belief and boundary is what this
+      // project exists to prevent. Let the run fail; the error names its own fix.
+      //
+      // A read-only sweep does not ask for it, because `--mode ask` is already the guard
+      // and a sandbox that will not start would only turn working sweeps into failures.
+      if (write) a.push('--sandbox', 'enabled');
+      // Headless has nobody to answer a workspace-trust prompt, and the run would hang.
+      a.push('--trust', '--output-format', 'text', '--model', model);
+      // Like opencode's --dir and grok's --cwd: the working directory is a FLAG, not the
+      // spawned process's cwd. crossmodel sets both.
+      if (cwd) a.push('--workspace', cwd);
+      if (resume) a.push(...(resume === 'last' ? ['--continue'] : [`--resume=${resume}`]));
+      // Confirmed against the binary: `Usage: agent [options] [command] [prompt...]`, and
+      // `-p, --print` carries `(default: false)`, so it is a boolean and the prompt is a
+      // trailing positional. The docs' own example (`agent -p "..." --model ...`) reads as
+      // if -p took the value, which is why this was worth checking rather than assuming.
+      a.push(prompt);
+      return a;
+    },
+    // Never pass --api-key: it would put the secret in argv, where any other user on the
+    // machine can read it out of `ps`. CURSOR_API_KEY in the environment is inherited by
+    // the child already.
+  },
+
   // Google Gemini CLI. 🟡 Argument shape not yet verified against a real install —
   // see issue #1. Fix and send a PR if it is wrong.
   gemini: {
@@ -253,22 +406,54 @@ export const BUILTIN_MODELS = {
   // mistake gemini and ollama have been making here since day one.
   // `opencode models` lists what your install actually offers; add the rest via config.
   flash:  { provider: 'opencode', model: 'opencode/deepseek-v4-flash-free' },
+  // xAI's coding model, named in the Grok Build launch post. Only ONE alias ships, on
+  // purpose: `grok models` lists what your subscription actually offers, and inventing
+  // alias names for models nobody here has called is how gemini and ollama ended up as
+  // entries that fail on first use. Add the rest via crossmodel.config.json.
+  grok:   { provider: 'grok', model: 'grok-build-0.1' },
+  // Grok 4.6 through a Cursor subscription — one bill, somebody else's model. Worth
+  // shipping alongside the direct xAI alias because a Cursor subscription is a pool many
+  // people already have, while Grok Build's own CLI needs a second one.
+  // Model id read from `agent --list-models` on 2026-08-13, not guessed — the first draft
+  // of this line said "grok-4.6" and no such id exists. The trailing tier is the reasoning
+  // effort: -low, -medium, -high, -xhigh, each with an optional -fast. Add the tiers you
+  // actually use to crossmodel.config.json; `agent --list-models` is the authority.
+  cgrok: { provider: 'cursor', model: 'cursor-grok-4.6-high' },
 };
 
 // ------------------------------------------------------------ user overrides
 
-export const CONFIG_NAMES = ['crossmodel.config.json', '../crossmodel.config.json'];
+// 🔴 $HOME FIRST, AND THAT ORDER IS THE WHOLE POINT.
+// An installed plugin lives at .../cache/<mkt>/<plugin>/<VERSION>/, so every update creates
+// a new directory and everything the user wrote into the old one is gone. lib/mode.mjs
+// spells this out and moves mode.json and routing.json to $HOME for exactly that reason —
+// and the model registry, the one file people hand-edit most, was left behind in the
+// versioned tree for several releases. Upgrading silently reverted you to the built-in
+// aliases. The plugin-local paths stay as a fallback so existing installs keep working.
+export const CONFIG_NAMES = [
+  path.join(USER_DIR, 'crossmodel.config.json'),
+  'crossmodel.config.json',
+  '../crossmodel.config.json',
+];
 
 function loadUserConfig() {
   for (const name of CONFIG_NAMES) {
-    const p = path.resolve(ROOT, name);
+    const p = path.isAbsolute(name) ? name : path.resolve(ROOT, name);
     if (!existsSync(p)) continue;
     try {
-      return { ...JSON.parse(readFileSync(p, 'utf8')), _path: p };
+      const raw = JSON.parse(readFileSync(p, 'utf8'));
+      // Valid JSON is not a valid config. `null`, an array, or a bare string all parse
+      // cleanly and then blow up on the first property access — an uncaught TypeError from
+      // inside a library, which reads as a crossmodel bug rather than your typo.
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        console.error(`crossmodel: ${p} must be a JSON object — it was IGNORED.`);
+        continue;
+      }
+      return { ...raw, _path: p };
     } catch (e) {
       // Never fall back silently — a malformed config that quietly reverts to defaults
       // is exactly the failure this project exists to prevent.
-      console.error(`crossmodel: ${name} is malformed and was IGNORED — ${e.message}`);
+      console.error(`crossmodel: ${p} is malformed and was IGNORED — ${e.message}`);
     }
   }
   return {};
@@ -282,7 +467,60 @@ export const MODELS = { ...BUILTIN_MODELS, ...(userCfg.models ?? {}) };
 
 // ------------------------------------------------------------------ transport
 
-function runCli(bin, args, timeoutMs, cwd, onLine, extraEnv) {
+// ── how a run is allowed to end ──────────────────────────────────────────────────────
+// 🔴 THERE IS NO WALL-CLOCK DEADLINE BY DEFAULT, AND THAT IS THE POINT.
+// Measured against real use: the failure that actually costs money here is not a hung
+// provider — it is a deadline chosen by whoever wrote the command. An orchestrator that
+// guesses "10 minutes should be enough" kills a 25-minute implementation run at minute 10,
+// and the tokens already spent are gone with nothing to show. That happened repeatedly;
+// a genuinely hung provider did not.
+//
+// So duration is not the signal. SILENCE is. A run emitting events is alive no matter how
+// long it takes; a run that has produced no byte on either pipe for a long stretch is dead
+// or wedged. `idleMs` kills only the second kind, and any byte on stdout OR stderr resets
+// it — which covers providers with an event stream (codex) and providers that merely print
+// as they go (opencode, grok).
+//
+// 🔴 AND THE IDLE WATCHDOG IS OFF BY DEFAULT TOO. It shipped at 20 minutes for about an
+// hour, and that default was wrong for a reason worth writing down: SILENCE ONLY MEANS
+// SOMETHING WHEN THERE IS A STREAM TO BE SILENT ON. With `--no-stream`, or with any
+// provider that has no event output, a healthy run prints nothing at all until it finishes
+// — an adversarial review on luna runs ~40 minutes that way. A watchdog on bytes would have
+// killed a working run and called it wedged, which is the same failure as the guessed
+// deadline, wearing a better argument.
+//
+// So nothing kills a run automatically. What replaces it is visibility, not a timer: the
+// CLI already prints a heartbeat naming how long the silence has lasted, and Ctrl-C now
+// takes the whole process group down. A human or an orchestrator watching that line can
+// decide; a clock cannot.
+//
+// `--idle-timeout <ms>` is there for unattended batches, where nobody is reading the
+// heartbeat and a wedged run would sit burning a slot until someone noticed.
+export const DEFAULT_IDLE_MS = 0; // no automatic kill; opt in with --idle-timeout
+
+// Every live child, so one set of signal handlers can take them all down. Registered once
+// at module scope rather than per call: the battery runs models in parallel, and adding two
+// listeners per concurrent run trips Node's max-listeners warning.
+const LIVE = new Set();
+
+/** SIGKILL a child's whole process group, falling back to the child alone. */
+function killTree(pid) {
+  try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+}
+
+let signalsWired = false;
+function wireSignals() {
+  if (signalsWired) return;
+  signalsWired = true;
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    process.on(sig, () => {
+      for (const pid of LIVE) killTree(pid);
+      process.exit(code);
+    });
+  }
+}
+
+function runCli(bin, args, timeoutMs, cwd, onLine, extraEnv, idleMs = DEFAULT_IDLE_MS) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     // Line buffer for streaming mode. A chunk boundary can land mid-JSON, so lines are
@@ -295,20 +533,66 @@ function runCli(bin, args, timeoutMs, cwd, onLine, extraEnv) {
     //
     // `cwd` is load-bearing: it is the directory the agent can read, and (with write)
     // the only one it can edit.
+    //
+    // `detached: true` puts the child in its own PROCESS GROUP so a kill can take the whole
+    // tree. Killing only the direct child left the `npm test` it had spawned running after
+    // crossmodel had already reported a timeout — and under --write that orphan keeps
+    // writing into a tree the caller now believes is settled. The cost of detaching is that
+    // the terminal's Ctrl-C no longer reaches the child, so the parent forwards it by hand
+    // (see the signal handlers below). Both halves are required; neither works alone.
     const p = spawn(bin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
       ...(cwd ? { cwd } : {}),
       // Some providers take their boundary from configuration rather than a sandbox, and
       // configuration arrives through the environment. See the opencode entry.
       ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
     });
+
     let out = '', err = '', done = false;
-    const timer = setTimeout(() => {
-      done = true;
-      p.kill('SIGKILL');
-      resolve({ ok: false, ms: Date.now() - t0, error: `timed out after ${timeoutMs}ms`, text: out });
-    }, timeoutMs);
+
+    // Ctrl-C must still stop the provider: a detached group outlives the parent and would
+    // keep burning the provider's quota with nobody watching.
+    LIVE.add(p.pid);
+    wireSignals();
+
+    let hardTimer = null;
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      hardTimer = setTimeout(() => {
+        done = true;
+        killTree(p.pid);
+        resolve({ ok: false, ms: Date.now() - t0, error: `timed out after ${timeoutMs}ms (explicit --timeout)`, text: out, timedOut: 'hard' });
+      }, timeoutMs);
+    }
+
+    // Idle watchdog. Rearmed on every byte, so it measures silence, never duration.
+    let idleTimer = null;
+    const armIdle = () => {
+      if (!(Number.isFinite(idleMs) && idleMs > 0)) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        done = true;
+        killTree(p.pid);
+        resolve({
+          ok: false,
+          ms: Date.now() - t0,
+          error: `no output for ${Math.round(idleMs / 1000)}s — treated as wedged and killed. ` +
+                 'Raise or disable this with --idle-timeout; it is NOT a limit on how long a run may take.',
+          text: out,
+          timedOut: 'idle',
+        });
+      }, idleMs);
+    };
+    armIdle();
+
+    const finish = () => {
+      if (hardTimer) clearTimeout(hardTimer);
+      if (idleTimer) clearTimeout(idleTimer);
+      LIVE.delete(p.pid);
+    };
+
     p.stdout.on('data', (d) => {
+      armIdle();
       out += d;
       if (!onLine) return;
       pending += d;
@@ -316,16 +600,23 @@ function runCli(bin, args, timeoutMs, cwd, onLine, extraEnv) {
       pending = lines.pop() ?? ''; // last element is the unterminated remainder
       for (const line of lines) if (line.trim()) onLine(line);
     });
-    p.stderr.on('data', (d) => { err += d; });
+    p.stderr.on('data', (d) => { armIdle(); err += d; });
     p.on('error', (e) => {
       if (done) return;
-      clearTimeout(timer);
-      const hint = e.code === 'ENOENT' ? ` (is "${bin}" installed and on PATH?)` : '';
+      finish();
+      // E2BIG is reachable with a large --file: a single argv entry is capped around 128 KB
+      // by the kernel, and the bare "spawn E2BIG" explains nothing at all.
+      const hint = e.code === 'ENOENT'
+        ? ` (is "${bin}" installed and on PATH?)`
+        : e.code === 'E2BIG'
+          ? ' (the prompt is too large to pass as a command-line argument — the kernel caps a single' +
+            ' argv entry at roughly 128 KB. Shrink it, or point --cwd at the files and let the agent read them itself.)'
+          : '';
       resolve({ ok: false, ms: Date.now() - t0, error: e.message + hint, text: '' });
     });
     p.on('close', (code) => {
       if (done) return;
-      clearTimeout(timer);
+      finish();
       // A final line without a trailing newline is still a line. Dropping it would lose
       // exactly the event that matters most: the last one.
       if (onLine && pending.trim()) { onLine(pending); pending = ''; }
@@ -352,6 +643,58 @@ function fail(entry, error) {
 }
 
 /**
+ * Every reason a call would be refused before a process is spawned, as a string, or null.
+ *
+ * Extracted so a CALLER can ask the question BEFORE doing anything with a side effect.
+ * bin/crossmodel.mjs states the rule — "a check must never cost more than the thing it is
+ * checking" — and then created a git worktree, a branch and a set of symlinks before
+ * reaching these checks, so `--worktree x --write --network` on a provider without a
+ * network toggle left the user cleaning up after an argument error. callModel still runs
+ * them itself: this is a second door on the same room, not a replacement for the lock.
+ */
+export function capabilityError(alias, opts = {}) {
+  const entry = MODELS[alias];
+  if (!entry) return `unknown model alias: ${alias}. Known: ${Object.keys(MODELS).join(', ')}`;
+  const provider = PROVIDERS[entry.provider];
+  if (!provider) return `model "${alias}" points at unknown provider "${entry.provider}"`;
+
+  if (opts.write && !opts.cwd) {
+    return 'write mode requires an explicit cwd — refusing to inherit the caller\'s directory as the writable scope.';
+  }
+  if (opts.write && provider.supportsWrite === false) {
+    return `provider "${entry.provider}" has no write mode wired up in crossmodel; run without --write.`;
+  }
+  // Each capability is announced, never assumed. Silently dropping `--effort` would mean
+  // believing a run was reasoning harder than it was — the kind of wrong belief that is
+  // worse than an error, because you act on it.
+  if (opts.effort && provider.supportsEffort !== true) {
+    return `provider "${entry.provider}" has no reasoning-effort control in crossmodel; drop --effort.`;
+  }
+  if (opts.network && provider.supportsNetwork !== true) {
+    return `provider "${entry.provider}" has no network toggle in crossmodel; drop --network.`;
+  }
+  if (opts.resume && provider.supportsResume !== true) {
+    return `provider "${entry.provider}" cannot resume a session in crossmodel; drop --resume.`;
+  }
+  // Network is a workspace-write-scoped setting in codex, so "read-only WITH network" is
+  // not expressible — asking for it would produce a flag that quietly does nothing.
+  //
+  // 🔴 And the obvious escape hatch does not work. Measured 2026-08-06: running
+  // workspace-write with `sandbox_workspace_write.writable_roots` pointed at a scratch
+  // directory did NOT confine anything — the agent overwrote a file in the cwd anyway.
+  // So do not "fix" this by narrowing writable_roots and granting network; that would
+  // hand out repo write access while the flag name promises otherwise. The safe pattern
+  // is the one in the message: copy what the agent must read into a throwaway directory
+  // and point --cwd there, so the only thing it can damage is the copy.
+  if (opts.network && !opts.write) {
+    return '--network requires --write (codex scopes the toggle to its workspace-write sandbox).\n' +
+      '  For a read-only sweep that still needs the internet, stage what it must read in a\n' +
+      '  throwaway directory and point --cwd there — the original tree is then untouchable.';
+  }
+  return null;
+}
+
+/**
  * Call a model by alias.
  * @param {string} alias   key of MODELS (e.g. 'luna')
  * @param {string} prompt  the instruction
@@ -375,44 +718,10 @@ export async function callModel(alias, prompt, opts = {}) {
   const provider = PROVIDERS[entry.provider];
   if (!provider) throw new Error(`model "${alias}" points at unknown provider "${entry.provider}"`);
 
-  // Writing without an explicit directory would let the agent edit wherever the parent
-  // process happens to be standing. Scope must be stated, never inherited.
-  if (opts.write && !opts.cwd) {
-    return fail(entry, 'write mode requires an explicit cwd — refusing to inherit the caller\'s directory as the writable scope.');
-  }
-  if (opts.write && provider.supportsWrite === false) {
-    return fail(entry, `provider "${entry.provider}" has no write mode wired up in crossmodel; run without --write.`);
-  }
-  // Each capability is announced, never assumed. Silently dropping `--effort` would mean
-  // believing a run was reasoning harder than it was — the kind of wrong belief that is
-  // worse than an error, because you act on it.
-  if (opts.effort && provider.supportsEffort !== true) {
-    return fail(entry, `provider "${entry.provider}" has no reasoning-effort control in crossmodel; drop --effort.`);
-  }
-  if (opts.network && provider.supportsNetwork !== true) {
-    return fail(entry, `provider "${entry.provider}" has no network toggle in crossmodel; drop --network.`);
-  }
-  if (opts.resume && provider.supportsResume !== true) {
-    return fail(entry, `provider "${entry.provider}" cannot resume a session in crossmodel; drop --resume.`);
-  }
-  // Network is a workspace-write-scoped setting in codex, so "read-only WITH network" is
-  // not expressible — asking for it would produce a flag that quietly does nothing.
-  //
-  // 🔴 And the obvious escape hatch does not work. Measured 2026-08-06: running
-  // workspace-write with `sandbox_workspace_write.writable_roots` pointed at a scratch
-  // directory did NOT confine anything — the agent overwrote a file in the cwd anyway.
-  // So do not "fix" this by narrowing writable_roots and granting network; that would
-  // hand out repo write access while the flag name promises otherwise. The safe pattern
-  // is the one in the message: copy what the agent must read into a throwaway directory
-  // and point --cwd there, so the only thing it can damage is the copy.
-  if (opts.network && !opts.write) {
-    return fail(
-      entry,
-      '--network requires --write (codex scopes the toggle to its workspace-write sandbox).\n' +
-        '  For a read-only sweep that still needs the internet, stage what it must read in a\n' +
-        '  throwaway directory and point --cwd there — the original tree is then untouchable.',
-    );
-  }
+  // Same checks bin/ runs before it creates anything. Duplicated on purpose: callModel is
+  // a public entry point, and the battery calls it directly.
+  const refusal = capabilityError(alias, opts);
+  if (refusal) return fail(entry, refusal);
 
   if (opts.schemaPath && provider.supportsSchema === false) {
     // Not fatal — just make sure nobody believes the output was schema-constrained.
@@ -454,7 +763,17 @@ export async function callModel(alias, prompt, opts = {}) {
   // policy travels that way, because it is the only channel a swept repo cannot override.
   const extraEnv = typeof provider.env === 'function' ? provider.env(ctx) : undefined;
 
-  const r = await runCli(provider.bin, provider.args(ctx), opts.timeoutMs ?? 2_400_000, opts.cwd, onLine, extraEnv);
+  // No wall-clock ceiling unless the caller asked for one — see DEFAULT_IDLE_MS above for
+  // why duration is the wrong thing to bound.
+  const r = await runCli(
+    provider.bin,
+    provider.args(ctx),
+    opts.timeoutMs ?? null,
+    opts.cwd,
+    onLine,
+    extraEnv,
+    opts.idleMs ?? DEFAULT_IDLE_MS,
+  );
 
   // Falling back to the raw stdout when nothing parsed keeps a protocol change from
   // silently turning a successful run into an empty answer.

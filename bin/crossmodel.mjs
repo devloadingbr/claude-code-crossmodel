@@ -18,16 +18,35 @@
 
 import { readFileSync, existsSync, appendFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { callModel, MODELS, availableModels } from '../bench/providers.mjs';
+import { callModel, MODELS, availableModels, capabilityError, DEFAULT_IDLE_MS } from '../bench/providers.mjs';
 import { readMode, writeMode, clearMode, parseUntil, describeUntil, MODE_PATH } from '../lib/mode.mjs';
 import { codexUsage, describeWindow, describeReset, bar } from '../lib/usage.mjs';
 import { teach } from '../lib/teach.mjs';
 
 const argv = process.argv.slice(2);
+
+// Every flag this build understands. Kept as data so an unrecognised `--something` can be
+// REFUSED rather than skipped — see the check further down. Adding a flag means adding it
+// here, which is the point: a flag the parser does not know about is a flag that silently
+// does nothing.
+const VALUE_FLAGS = new Set(['model', 'file', 'timeout', 'idle-timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree', 'log', 'link', 'prefer', 'until']);
+const BOOL_FLAGS = new Set(['write', 'network', 'quiet', 'no-stream', 'list', 'help', 'version', 'json', 'dry-run']);
+
 const flag = (name, fallback = null) => {
   const i = argv.indexOf(`--${name}`);
-  return i === -1 ? fallback : argv[i + 1];
+  if (i === -1) return fallback;
+  const v = argv[i + 1];
+  // A flag at the end of the line, or one followed by another flag, has no value. Returning
+  // undefined made that indistinguishable from "not passed": `--timeout` alone fell back to
+  // the default, and `--cwd` alone let the child inherit the caller's directory. Both are
+  // silent, and the second one is a scope decision made by accident.
+  if (v === undefined || v.startsWith('--')) {
+    console.error(`crossmodel: --${name} needs a value${v === undefined ? ' (nothing followed it)' : `, got the flag "${v}"`}.`);
+    process.exit(1);
+  }
+  return v;
 };
 const has = (name) => argv.includes(`--${name}`);
 
@@ -36,7 +55,11 @@ const has = (name) => argv.includes(`--${name}`);
 // Printing it turns "that subcommand does not exist" into "you are on an older build".
 const VERSION = (() => {
   try {
-    const here = path.dirname(new URL(import.meta.url).pathname);
+    // fileURLToPath, not `.pathname`: the latter is percent-encoded, so a plugin installed
+    // under a path with a space reports its version as "unknown" — which then appears in
+    // the unknown-subcommand error as "this build (unknown)", the exact useless message
+    // that error was written to replace.
+    const here = path.dirname(fileURLToPath(import.meta.url));
     return JSON.parse(readFileSync(path.join(here, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version ?? 'unknown';
   } catch {
     return 'unknown';
@@ -229,10 +252,23 @@ Options:
   --cwd <dir>        directory the model may read and explore. These CLIs are agentic —
                      give them a repo and they grep and read it themselves, so you do
                      not have to paste code into the prompt.
-  --write            let the model edit files inside --cwd (required with it). Writes
-                     are confined to that directory; anything outside is rejected.
-                     Off by default. The model still cannot commit, and has no network
-                     unless you also pass --network.
+  --write            let the model edit files inside --cwd (required with it). Off by
+                     default, and no network unless you also pass --network.
+
+                     ⚠️ HOW WELL "inside --cwd" HOLDS DEPENDS ON THE PROVIDER, and the
+                     difference is not cosmetic:
+                       codex   OS sandbox. A write outside fails at the syscall, and .git/
+                               is read-only, so it cannot commit whatever it decides.
+                       grok    OS sandbox (Landlock/Seatbelt) — but .git/ IS writable, so
+                               it can commit. Check "git log", not just the diff.
+                       opencode
+                               a permission policy, in process, and the shell gets around
+                               it. MEASURED: "echo x > /outside/file" from the agent's
+                               shell succeeded and wrote outside the directory. Treat the
+                               scope as a strong convention, not a boundary.
+                     Point --write at a throwaway worktree whichever you use, and review
+                     the diff. The orchestrator reviewing is what makes this safe — the
+                     provider's boundary is a second line, not the first.
   --worktree <dir>   create (or reuse) an isolated git worktree and use it as --cwd.
                      Requires --write. node_modules is symlinked in automatically, because
                      a worktree that cannot run the project's tests cannot verify its own
@@ -253,9 +289,19 @@ Options:
                      the most recent. Use after a run dies — the context it already paid
                      for survives, and re-reading the repo is the expensive part.
   --file <path>      append a file's contents to the prompt
-  --timeout <ms>     default 2400000 (40 min), or 3600000 with --write. Under --write a kill
-                     leaves half-applied edits with no rollback, so values under 600000
-                     are refused rather than risked.
+  --timeout <ms>     a HARD ceiling. There is NO DEFAULT — omit it. A run takes as long as
+                     it takes, and the deadline somebody guessed is what actually kills
+                     runs and wastes everything already spent. Under --write, values below
+                     600000 are refused: a kill mid-run leaves half-applied edits with no
+                     rollback.
+  --idle-timeout <ms>
+                     kill a run that has produced NO output for this long. ALSO OFF BY
+                     DEFAULT: silence only means something when there is a stream to be
+                     silent on, and with --no-stream (or a provider without one) a healthy
+                     run prints nothing until it finishes — an adversarial review runs ~40
+                     minutes that way. For unattended batches where nobody is watching the
+                     heartbeat. Nothing kills a run automatically otherwise; the heartbeat
+                     reports the silence and Ctrl-C stops the whole process group.
   --schema <path>    JSON Schema for structured output (only providers whose CLI
                      supports it, e.g. codex. Elsewhere it is dropped with a
                      warning on stderr — never silently, or you would trust a shape
@@ -327,13 +373,24 @@ if (!MODELS[alias]) {
 }
 
 // The prompt is the first bare argument (anything not a flag or a flag's value).
-const flagsTakingValue = new Set(['model', 'file', 'timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree', 'log', 'link']);
+//
+// 🔴 AN UNRECOGNISED FLAG IS AN ERROR, NOT SOMETHING TO SKIP.
+// This loop used to skip every token starting with `--`, known or not, so `--wrte` (a typo
+// for --write) vanished without a word: the run went ahead read-only, the agent reported it
+// could not write, and nothing anywhere said why. That is the same defect the unknown-
+// subcommand check below was written to fix, one level down — a typo silently changing what
+// the command does.
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--')) {
-    if (flagsTakingValue.has(a.slice(2))) i++;
-    continue;
+    const name = a.slice(2);
+    if (VALUE_FLAGS.has(name)) { i++; continue; }
+    if (BOOL_FLAGS.has(name)) continue;
+    console.error(`crossmodel: unknown flag "${a}". Run --help for the list.`);
+    console.error('  A flag this build does not know is refused rather than ignored, because an ignored');
+    console.error('  typo changes what the run does without saying so.');
+    process.exit(1);
   }
   positional.push(a);
 }
@@ -356,37 +413,91 @@ if (!prompt) {
 let cwd = flag('cwd');
 const write = has('write');
 
-// ── timeout ──────────────────────────────────────────────────────────────────────────
+// 🔴 --cwd IS RESOLVED TO AN ABSOLUTE PATH HERE, AND THAT IS LOAD-BEARING.
+// Several providers take their working directory as a FLAG (`--workspace` for cursor,
+// `--dir` for opencode, `--cwd` for grok) while crossmodel ALSO sets the spawned process's
+// cwd to the same place. A relative value therefore gets resolved twice, against itself:
+// measured on the first cursor call ever made, `--cwd lib` became
+// "Workspace directory does not exist: .../crossmodel/lib/lib". An absolute path cannot be
+// re-resolved, so it is unambiguous no matter what the child does with it.
+// --worktree already did this; --cwd did not, and nothing made that asymmetry visible.
+if (cwd) {
+  cwd = path.resolve(cwd);
+  // Cheaper to say so now than to have the provider say it in its own vocabulary, after
+  // the call has been billed.
+  if (!existsSync(cwd)) {
+    console.error(`crossmodel: --cwd ${cwd} does not exist.`);
+    process.exit(1);
+  }
+}
+
+// ── how a run is allowed to end ──────────────────────────────────────────────────────
 // Validated HERE, before anything with a side effect runs. Creating a worktree and only
 // then refusing the run would leave the user cleaning up after an argument error — a
 // check must never cost more than the thing it is checking.
 //
-// 🔴 A timeout kill is DESTRUCTIVE under --write: the process dies by SIGKILL wherever it
-// happens to be, and half-applied edits stay on disk with no rollback. A default sized for
-// a question (4 min) is therefore actively dangerous for an implementation run — measured
-// at ~25 min for a single phase. So --write gets a default an order of magnitude larger,
-// and an explicitly short one is refused rather than silently honoured.
-const SWEEP_TIMEOUT_MS = 2_400_000;     // 40 min — measured: a real sweep on a large repo
-                                        // routinely outruns a 4-minute default, and the
-                                        // kill looked like a provider failure rather than
-                                        // an impatient caller. Read-only, so a kill costs
-                                        // the run and nothing else.
-const WRITE_TIMEOUT_MS = 3_600_000;     // 1 h  — an implementation run reads before it writes
-const WRITE_TIMEOUT_FLOOR_MS = 600_000; // below 10 min, --write is a coin flip
+// 🔴 THERE IS NO DEFAULT DEADLINE. A run takes as long as it takes.
+// This used to default to 40 min (sweep) / 1 h (write), and the defaults were not the
+// problem — the flag was. Measured over real use: the run that dies and wastes everything
+// already spent is almost never a hung provider. It is a deadline somebody guessed, usually
+// an orchestrator writing `--timeout 300000` because five minutes sounded generous, on a
+// task that needed twenty-five. The tokens are gone and there is nothing to resume from.
+//
+// Nothing replaces it automatically, either. The obvious substitute — kill a run that has
+// gone quiet — is wrong for the same reason once you look at when a run is quiet: with
+// --no-stream, or on any provider without an event stream, a perfectly healthy run prints
+// NOTHING until it finishes, and an adversarial review on luna takes ~40 minutes like that.
+// A byte-based watchdog would kill it and call it wedged. See DEFAULT_IDLE_MS.
+//
+// What actually guards against a wedged run is visibility plus a working Ctrl-C: the
+// heartbeat below names how long the silence has lasted, and interrupting now takes the
+// child's whole process group with it.
+//
+// --timeout and --idle-timeout both remain, both opt-in, for callers who genuinely want a
+// ceiling — an unattended batch, where nobody is reading the heartbeat.
+const WRITE_TIMEOUT_FLOOR_MS = 600_000; // below 10 min, an explicit --write ceiling is a coin flip
 
 const timeoutRaw = flag('timeout');
-const timeoutMs = timeoutRaw ? Number(timeoutRaw) : write ? WRITE_TIMEOUT_MS : SWEEP_TIMEOUT_MS;
-if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-  console.error(`crossmodel: --timeout must be a positive number of milliseconds (got "${timeoutRaw}").`);
-  process.exit(1);
+let timeoutMs = null;
+if (timeoutRaw !== null && timeoutRaw !== undefined) {
+  timeoutMs = Number(timeoutRaw);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    console.error(`crossmodel: --timeout must be a positive number of milliseconds (got "${timeoutRaw}").`);
+    console.error('  Omitting it is the recommended choice: there is no default deadline, only an idle watchdog.');
+    process.exit(1);
+  }
+  // 🔴 A timeout kill is DESTRUCTIVE under --write: the process dies by SIGKILL wherever it
+  // happens to be, and half-applied edits stay on disk with no rollback.
+  if (write && timeoutMs < WRITE_TIMEOUT_FLOOR_MS) {
+    console.error(
+      `crossmodel: --timeout ${timeoutMs}ms is too short for --write. A kill mid-run leaves half-applied\n` +
+      `edits on disk with no rollback, so this is refused rather than risked. Use at least ${WRITE_TIMEOUT_FLOOR_MS}ms,\n` +
+      '  or — better — drop --timeout entirely. There is no default deadline; a silent run is still caught\n' +
+      '  by the idle watchdog, and a working one is never killed for taking long.',
+    );
+    process.exit(1);
+  }
+  if (!has('quiet')) {
+    console.error(`crossmodel: --timeout ${timeoutMs}ms is a HARD ceiling — the run is killed at that mark even if it is`);
+    console.error('  actively working. Omit it unless you specifically want that.');
+  }
 }
-if (write && timeoutMs < WRITE_TIMEOUT_FLOOR_MS) {
-  console.error(
-    `crossmodel: --timeout ${timeoutMs}ms is too short for --write. A kill mid-run leaves half-applied\n` +
-    `edits on disk with no rollback, so this is refused rather than risked. Use at least ${WRITE_TIMEOUT_FLOOR_MS}ms,\n` +
-    `or drop --write to run read-only.`,
-  );
-  process.exit(1);
+
+// The idle watchdog, off unless asked for. `0` or `off` is the default state.
+const idleRaw = flag('idle-timeout');
+let idleMs = DEFAULT_IDLE_MS;
+if (idleRaw !== null && idleRaw !== undefined) {
+  idleMs = idleRaw === 'off' ? 0 : Number(idleRaw);
+  if (!Number.isFinite(idleMs) || idleMs < 0) {
+    console.error(`crossmodel: --idle-timeout must be milliseconds, or "off" (got "${idleRaw}").`);
+    process.exit(1);
+  }
+  // Silence is only evidence when there is a stream to be silent on. Without one, a healthy
+  // run is silent from start to finish and this flag becomes a disguised deadline.
+  if (idleMs > 0 && has('no-stream') && !has('quiet')) {
+    console.error('crossmodel: --idle-timeout with --no-stream is a deadline in disguise — a run with no event');
+    console.error('  stream prints nothing until it finishes, so ANY silence budget will eventually kill a healthy run.');
+  }
 }
 
 // ── --worktree: make the recommended path the easy path ──────────────────────────────
@@ -395,6 +506,27 @@ if (write && timeoutMs < WRITE_TIMEOUT_FLOOR_MS) {
 // remember it shares the object store) is exactly the kind of chore people skip. This
 // creates the worktree, hands it over as --cwd, and leaves it in place afterwards —
 // removal stays manual on purpose, because the whole point is that you review the diff.
+// ── preflight: refuse before anything has a side effect ──────────────────────────────
+// Every reason this call cannot work, asked BEFORE the worktree block below creates a
+// directory, a branch and a set of symlinks. These checks used to live only inside
+// callModel, which runs after all of that, so `--worktree x --write --network` on a
+// provider with no network toggle left an orphaned worktree behind and then refused.
+{
+  const refusal = capabilityError(alias, {
+    write,
+    // The worktree does not exist yet; what matters here is only whether a writable scope
+    // was named at all, which either flag satisfies.
+    cwd: cwd ?? flag('worktree') ?? undefined,
+    effort: flag('effort') ?? undefined,
+    network: has('network'),
+    resume: flag('resume') ?? undefined,
+  });
+  if (refusal) {
+    console.error(`crossmodel: ${refusal}`);
+    process.exit(1);
+  }
+}
+
 const worktree = flag('worktree');
 if (worktree) {
   if (cwd) {
@@ -580,6 +712,7 @@ const treeBefore = write ? treeSignature(cwd) : null;
 
 const r = await callModel(alias, prompt, {
   timeoutMs,
+  idleMs,
   schemaPath: flag('schema') ?? undefined,
   cwd: cwd ?? undefined,
   write,
@@ -600,8 +733,21 @@ if (!r.ok) {
   // without write support) spawns nothing, so telling the caller to inspect the tree for
   // half-applied edits sends them hunting for damage that cannot exist.
   if (write && r.started !== false) {
-    console.error(`crossmodel: ${cwd} may hold PARTIAL edits — check \`git -C ${cwd} status\` before rerunning.`);
-    console.error('crossmodel: to continue where it stopped instead of starting cold: --resume last');
+    // Before scaring the caller, ask the tree. A child that died on startup — a sandbox
+    // that would not initialise, a bad flag, a failed auth — spawned and exited without
+    // touching anything, and `started` cannot see that because the process DID start.
+    // Measured: a cursor run rejected by its own sandbox produced a "may hold PARTIAL
+    // edits" warning and a --resume suggestion for a run that had done nothing at all.
+    // A post-mortem about damage that cannot exist sends people hunting, and teaches them
+    // to ignore the warning that matters.
+    const treeAfter = treeSignature(cwd);
+    const untouched = treeBefore !== null && treeAfter === treeBefore;
+    if (untouched) {
+      console.error(`crossmodel: ${cwd} is UNCHANGED — the run failed before writing anything.`);
+    } else {
+      console.error(`crossmodel: ${cwd} may hold PARTIAL edits — check \`git -C ${cwd} status\` before rerunning.`);
+      console.error('crossmodel: to continue where it stopped instead of starting cold: --resume last');
+    }
   }
   process.exit(2);
 }
@@ -631,20 +777,35 @@ process.stdout.write(r.text);
 //     stream). Gating this on r.streamed alone meant a no-op silently exited 0 for every
 //     provider that has no event output — the exact hole this check exists to close.
 if (write) {
+  const treeAfter = r.streamed ? null : treeSignature(cwd);
   const wroteNothing = r.streamed
     ? filesWritten === 0
-    : treeBefore !== null && treeSignature(cwd) === treeBefore;
+    // 🔴 treeAfter === null must NOT read as "unchanged" and must not read as "wrote
+    // something" either. If git fails after the run — a lock, a .git the agent moved — the
+    // comparison is unknowable, and defaulting either way is a guess presented as a fact.
+    // The `!r.streamed && treeAfter === null` branch below is the one that says so.
+    : treeBefore !== null && treeAfter !== null && treeAfter === treeBefore;
 
   if (wroteNothing) {
     console.error('crossmodel: the run succeeded but wrote NO files — read the answer before treating this as done.');
-    process.exit(3);
-  }
+    // 🔴 `process.exit(3)` here TRUNCATED the answer. stdout to a pipe is async, and exit()
+    // does not flush it: measured, 500,000 bytes written and 65,536 delivered. This is the
+    // one exit path where the prose IS the whole deliverable — the agent hit a blocker and
+    // explained why — so destroying it was the worst possible place for that bug.
+    // Setting exitCode lets the script end normally, which flushes.
+    process.exitCode = 3;
+  } else
 
-  // Not knowing is its own outcome and must not read as "it wrote something". Happens when
-  // the target is outside a git repo, so there is nothing cheap to diff against.
-  if (!r.streamed && treeBefore === null) {
+  // Not knowing is its own outcome and must not read as "it wrote something". Two ways to
+  // land here: the target was never a git repo (nothing to diff against), or git worked
+  // before the run and failed after it — a lock, or a .git the agent disturbed. The second
+  // was previously indistinguishable from success.
+  if (!r.streamed && (treeBefore === null || treeAfter === null)) {
+    const why = treeBefore === null
+      ? `${cwd} is not a git repo`
+      : `git stopped answering in ${cwd} partway through — the tree may have been disturbed`;
     console.error(
-      `crossmodel: could not verify whether any file changed — "${r.provider}" reports no events and ${cwd} is not a git repo.\n` +
+      `crossmodel: could not verify whether any file changed — "${r.provider}" reports no events and ${why}.\n` +
       '  Check the tree yourself before treating this as done.',
     );
   }

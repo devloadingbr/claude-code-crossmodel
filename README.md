@@ -3,9 +3,9 @@
 **Delegate work from Claude Code to another agentic CLI — and know which models you can trust with what.**
 
 Claude Code is excellent at orchestrating. It is also the only thing spending your
-Anthropic quota. `crossmodel` hands work to an external agentic CLI — OpenAI's Codex, or
-OpenCode and through it OpenRouter, Ollama and anything OpenAI-compatible — so it bills to
-*that* provider's pool instead.
+Anthropic quota. `crossmodel` hands work to an external agentic CLI — OpenAI's Codex, xAI's
+Grok Build, the Cursor CLI, or OpenCode and through it OpenRouter, Ollama and anything
+OpenAI-compatible — so it bills to *that* provider's pool instead.
 
 "Agentic" is the load-bearing word. These are not chat endpoints: point one at a
 directory and it greps and reads the tree itself, and with `--write` it edits inside that
@@ -15,7 +15,7 @@ The catch nobody addresses: **how do you know what the cheap model can actually 
 So this ships with a deterministic benchmark. No LLM judges another LLM; a test suite
 decides.
 
-> **Status: v0.10.0, early.** Works, tested end to end, but the API may move. Issues and
+> **Status: v0.11.0, early.** Works, tested end to end, but the API may move. Issues and
 > PRs welcome.
 
 ---
@@ -37,11 +37,13 @@ That detects which provider CLIs you have, asks which models you want and what t
 them, **verifies each one with a real call**, and writes the config. No hand-edited JSON,
 and no alias left in the file that fails the first time you use it.
 
-You need at least one provider installed. Two good entry points:
+You need at least one provider installed. Three good entry points:
 
 ```bash
 npm install -g opencode-ai      # free models available with no key at all
 npm install -g @openai/codex    # then: codex login
+curl -fsSL https://x.ai/cli/install.sh | bash
+# or: npm i -g @xai-official/grok
 ```
 
 **OpenCode** costs nothing to try — `opencode models` lists free models that need no
@@ -51,8 +53,17 @@ binary later reaches OpenRouter, Ollama or any OpenAI-compatible endpoint.
 **Codex** is the one with an OS sandbox, so it is where write-heavy work belongs. It bills
 to a ChatGPT subscription rather than a metered API key.
 
+**Grok Build** is documented by xAI as an agentic CLI. 🟡 Documentation-only, not measured
+here (docs.x.ai/build, read 2026-08-12). It needs a SuperGrok or X Premium+ subscription;
+headless auth uses `XAI_API_KEY`. crossmodel ships one alias, `grok`, for
+`grok-build-0.1`; `grok models` lists the rest, which you can add through
+`crossmodel.config.json`.
+
 Prefer to configure by hand? Copy `crossmodel.config.example.json` to
-`crossmodel.config.json`. The setup skill just does this for you, with verification.
+`~/.claude/crossmodel/crossmodel.config.json`. The setup skill just does this for you, with
+verification. The home-directory file is checked first; a plugin-local
+`crossmodel.config.json` remains a legacy fallback. Do not put the working copy next to
+`bench/providers.mjs`: plugin updates replace the versioned plugin directory.
 
 ---
 
@@ -83,6 +94,15 @@ never reported as a result here.
 When there is no event stream the working tree is compared before and after. If neither is
 possible — no stream and the target is not a git repo — crossmodel says it could not tell,
 rather than implying files changed.
+
+#### Flags
+
+**Flags are strict.** An unrecognised flag is an error: `--wrte` cannot disappear and turn
+the run into an accidental read-only call. A flag with no value, or followed by another
+flag, is also an error: `--timeout` does not fall back to its default and `--cwd` does not
+inherit the caller's directory. Capability checks for `--network`, `--effort` and
+`--resume` run before `--worktree` creates anything, so a bad combination leaves no
+orphaned worktree or branch.
 
 #### Repo sweeps — the part worth stealing
 
@@ -221,16 +241,24 @@ function and nowhere near enough to judge whether it belongs.
 **Why external models get an isolated scope.** An external CLI runs *its own* agent loop
 with its own definition of "done" and its own appetite for adjacent cleanup — unlike a
 Claude subagent, which runs under this harness's rules. That's a scoping problem, not a
-reason to forbid writing, so `--write` requires an explicit `--cwd` and confines edits to
-it. Point it at a `git worktree` and two agents can work at once without meeting.
+reason to forbid writing, so `--write` requires an explicit `--cwd` and asks the provider to
+scope edits to it. The strength of that scope differs by provider. Point it at a `git
+worktree` and two agents can work at once without meeting.
 
-Verified, not assumed: with `--write`, edits inside the directory succeed and edits
-outside are rejected (`patch rejected: writing outside of the project`). The system temp
-dir is writable in both modes. Network is blocked by default in both modes, so nothing can
-push, deploy, or call a webhook — and it stays that way unless you pass `--network`, which
-requires `--write` and exists so an agent can run a test suite that talks to a local
-service. Opening it is a real widening of scope: with network on, "cannot call a webhook"
-no longer holds. Grant it when you want the agent's work verified, not by default.
+Verified, not assumed for codex: with `--write`, edits inside the directory succeed and
+edits outside are rejected (`patch rejected: writing outside of the project`); `.git/` is
+read-only. Grok Build's OS sandbox is documented, not measured here — see below. OpenCode's
+policy narrows the shell hole but is not a boundary. Network is blocked by default in both
+measured codex modes, so nothing can push, deploy, or call a webhook — and it stays that
+way unless you pass `--network`, which requires `--write` and exists so an agent can run a
+test suite that talks to a local service. Opening it is a real widening of scope: with
+network on, "cannot call a webhook" no longer holds. Grant it when you want the agent's
+work verified, not by default.
+
+`--cwd` is resolved to an absolute path and checked for existence before any provider is
+spawned. This closes a bug where a relative directory was resolved twice — `--cwd lib`
+became `lib/lib` — and applies to providers whose directory is a flag (`--workspace`,
+`--dir` or `--cwd`) as well as those using the child's process directory.
 
 ```
 orchestrator ──asks──▶ model ──writes in an isolated scope + proves──▶ orchestrator reviews ──▶ commits
@@ -285,15 +313,33 @@ crossmodel --model luna --worktree /tmp/wt-feature --write --network \
 
 ### Timeouts are a destructive failure mode under `--write`
 
-A timeout kill is `SIGKILL` wherever the agent happens to be: **half-applied edits stay on
-disk, with no rollback.** A default sized for a question is actively dangerous for an
-implementation run — the two phases above took ~25 minutes each against a 4-minute default.
+There is no default wall-clock deadline. `--timeout <ms>` has no default: it is an opt-in
+hard ceiling. The deadline somebody guessed is what actually kills runs and wastes tokens
+already spent, far more often than a provider genuinely hangs.
 
-So the default now depends on what you asked for: **40 min** for a sweep, **1 h** with
-`--write`, and anything under **10 min** with `--write` is *refused* rather than risked.
-Validation runs before any side effect, so a rejected argument never leaves a worktree
-behind. When a `--write` run does fail, the error says the tree may hold partial edits and
-points at `--resume last`.
+**Nothing kills a run automatically.** The obvious substitute — a watchdog on silence
+rather than on duration — was built, shipped, and then turned off by default, because
+silence only means something when there is a stream to be silent on. With `--no-stream`, or
+on any provider without an event stream, a perfectly healthy run prints nothing at all
+until it finishes, and an adversarial review on a reasoning model runs ~40 minutes that
+way. A byte-based watchdog would kill it and call it wedged — the guessed deadline again,
+wearing a better argument.
+
+What guards against a genuinely wedged run instead is visibility plus a working
+interrupt. The progress reporter prints a heartbeat naming how long the silence has lasted,
+and the child now runs in its own process group, so Ctrl-C takes the whole tree with it —
+a backgrounded `npm test` no longer survives the way it used to.
+
+`--idle-timeout <ms>` is still there, off unless you ask for it, for unattended batches
+where nobody is reading the heartbeat and a wedged run would sit burning a slot.
+
+The **600000 ms** floor still applies, but only to an explicit `--timeout` under `--write`.
+
+When a `--write` run does fail, crossmodel asks the tree before it alarms you: it reports
+the tree **is UNCHANGED** when the failed child touched nothing, and only warns about
+possible partial edits — and points at `--resume last` — when there is something to
+inspect. A post-mortem about damage that cannot exist teaches people to ignore the warning
+that matters.
 
 ---
 
@@ -427,6 +473,11 @@ bug in a sample we had labelled "clean". A benchmark is a rumour until you verif
 **A new model on an existing provider** is a config change — `/crossmodel-setup` writes
 it, or do it by hand:
 
+`crossmodel.config.json` lives at `~/.claude/crossmodel/crossmodel.config.json` first.
+The plugin directory is a legacy fallback only; a config stored there is lost when the
+versioned plugin path is replaced during an update. Add aliases in the home-directory
+file, not next to `bench/providers.mjs`.
+
 ```json
 {
   "models": {
@@ -441,7 +492,31 @@ into that CLI's argument list — which JSON can't express. It belongs in
 `bench/providers.mjs` as a pull request. It is about ten lines; see `codex` for the shape,
 including how a sandbox flag maps to `write`.
 
-Built in: `codex`, `opencode`, `gemini`, `ollama`, and `claude` (as the benchmark baseline).
+Built in: `codex`, `grok`, `cursor`, `opencode`, `gemini`, `ollama`, and `claude` (as the
+benchmark baseline). Of those, `cursor` is verified by a real run and `grok` is
+documentation-only.
+
+### Grok Build: xAI's agentic CLI
+
+`grok` is the xAI Grok Build CLI (binary: `grok`). 🟡 The facts in this section come from
+docs.x.ai/build, read on 2026-08-12; they are documentation-only and not from a measured
+run. Install it with `curl -fsSL https://x.ai/cli/install.sh | bash` or
+`npm i -g @xai-official/grok`. It needs a SuperGrok or X Premium+ subscription, and
+headless authentication uses `XAI_API_KEY`.
+
+crossmodel ships one alias: `grok` → `grok-build-0.1`. Run `grok models` to list the rest
+and add another model through `crossmodel.config.json`.
+
+Grok is the second provider here with a real OS sandbox: Landlock on Linux and Seatbelt on
+macOS. It therefore belongs in codex's confinement tier, not OpenCode's. crossmodel passes
+`--sandbox read-only` for a sweep, `--sandbox strict` for `--write` (writes and reads are
+confined to `--cwd`, and child network is blocked), and `--sandbox workspace` for
+`--write --network` (network is allowed and reads widen).
+
+Two caveats matter. Child-network blocking is Linux-only; on macOS it is a no-op for
+read-only and strict. Unlike codex, Grok leaves `.git/` writable, so a Grok `--write` run
+can commit — review `git log` as well as the diff. Streaming progress is not wired up for
+Grok because its streaming-JSON event schema is undocumented.
 
 ### OpenCode: one harness, many backends
 
@@ -456,9 +531,13 @@ Write tool is checked. The same path inside `printf 'x' > /outside/file` is not 
 permission layer that is just "run a command". Measured against opencode 1.18.14, with no
 `--auto`: the first was refused, the second succeeded.
 
-An **allowlist** closes exactly that. crossmodel injects a bash policy whose floor is
-`"*": "ask"`, and a non-interactive run has nobody to ask, so an unrecognised command is
-refused. The shell stops being a way around the policy and becomes subject to it.
+An **allowlist narrows that hole and removes the easy paths; it does not close it**.
+OpenCode matches a command by its leading word, so any allowlisted command that can
+redirect or execute carries the hole: `echo`, `cat`, `sed -i`, `awk`, and `find -exec` are
+allowed unconditionally, while `node -e` and `python3 -c` are allowed under `--write` and
+provide arbitrary execution. In a measurement on 2026-08-12, with the policy in force,
+`echo BACKUP > /outside/file` from the agent shell exited 0 and overwrote a file outside
+the workspace; `cat` of that same path was refused as `external_directory`.
 
 The shipped default is the house rule as configuration — let the agent work, keep what is
 the orchestrator's:
@@ -480,7 +559,8 @@ Verified end to end, not assumed — with the policy active, in a `--write` run:
 |---|---|
 | Write a file inside the working dir | ✅ succeeds |
 | Write **tool** aimed outside it | 🔒 blocked |
-| `printf 'x' > /outside/file` via the **shell** | 🔒 blocked — the old hole |
+| `echo BACKUP > /outside/file` via the **shell** | 🔴 exited 0 and overwrote a file outside the workspace (measured 2026-08-12) |
+| `cat /outside/file` via the **shell** | 🔒 refused as `external_directory` |
 | Edit a file, then `git commit` | ✅ edited · 🔒 commit refused |
 | `rm` a file | 🔒 blocked |
 | `git diff --stat` | ✅ still works |
@@ -491,13 +571,58 @@ That last row is why the policy travels as `OPENCODE_CONFIG_CONTENT` and not
 latter, so a repo you do not control could hand itself full permissions. The inline form
 loads after the project config and wins.
 
-⚠️ Still enforced in process, by OpenCode. Much stronger than nothing, and not codex —
-which fails the write at the syscall no matter what the model decides. Route work that
-must not touch the tree to codex.
+⚠️ Still enforced in process, by OpenCode. The allowlist is much stronger than nothing,
+but `"confined to --cwd"` is a strong convention, not a boundary: the policy does not
+prevent every allowlisted shell command from redirecting or executing. The real boundary
+is the orchestrator reviewing the diff before committing. Codex fails an out-of-scope write
+at the syscall; Grok's documented OS sandbox is described above, but unlike codex its
+`.git/` remains writable.
 
 **One trap worth knowing if you script OpenCode yourself:** it does not take its working
 directory from the spawned process. With the child's cwd set to a target repo and the
 parent sitting in `/tmp`, it wrote `/tmp/NEW.txt`. `--dir` is what actually aims it.
+
+`env` is deliberately absent from the allowlist. The child inherits the full parent
+environment, so allowing `env` would print every API key in the shell into the answer (and
+into `--log` on disk); `env CMD` would also launder a denied command through an allowed
+leading word.
+
+### Cursor: a fourth quota pool, and a harness
+
+Cursor's CLI is the `agent` binary:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+agent login                 # or set CURSOR_API_KEY
+```
+
+One alias ships: `cgrok` maps to `cursor-grok-4.6-high` (Grok 4.6). `agent --list-models`
+lists the rest; the same subscription also carries GPT-5.6 Sol, Claude Opus 5, Kimi K3
+and Composer. Add any model you use via `~/.claude/crossmodel/crossmodel.config.json`.
+
+Cursor does not take reasoning effort as a flag. The tier is baked into the model id:
+`-low`, `-medium`, `-high` or `-xhigh`, each with an optional `-fast`. crossmodel therefore
+**refuses `--effort` for Cursor** rather than dropping it silently; choose the tier by
+choosing the alias. It refuses `--network` too: Cursor's `--sandbox` accepts only
+`enabled|disabled`, with no network knob and no read-only/strict distinction.
+
+**Verified by a real run on 2026-08-13 against `agent` 2026.08.11-e8db854:** a read-only
+sweep took 45s and answered correctly. This distinguishes Cursor from `grok`, which is
+documentation-only. `agent -p` is **not read-only by default** — the documentation
+says it has access to all tools, including write and shell — so crossmodel passes
+`--mode ask` for sweeps. That was measured refusing a shell write, with the target file
+left untouched.
+
+**Measured, and important:** `--sandbox enabled` failed to start on stock Ubuntu with
+`Sandbox mode is enabled but not available on this system... possibly due to AppArmor
+configuration. Run agent sandbox disable to switch to allowlist mode`. crossmodel asks for
+the sandbox only under `--write` and lets that failure stand loudly; it does not fall back
+to Cursor's weaker allowlist mode. A run that quietly degrades to a weaker boundary than
+the caller believes is the exact failure this project exists to prevent. In practice,
+`cgrok` is excellent for sweeps and currently unavailable for `--write` on such a machine.
+
+Cursor is a **harness**, like OpenCode: the alias names a model inside somebody else's
+agent loop.
 
 ### Why CLI only, and no HTTP APIs
 
@@ -518,13 +643,19 @@ discipline beat surface area: if it can't read your working directory, it's out.
 - **Only CLI-backed models see your repo.** Agentic CLIs read the tree when given
   `--cwd`; HTTP-backed models see nothing but the prompt text. Neither can see the
   *conversation*, so state the goal explicitly either way.
-- **Read-only is the default; `--write` is opt-in and scoped.** Edits are confined to the
-  `--cwd` you name, and nothing external commits — but *how* that holds differs by
-  provider. codex enforces it in the kernel: the write fails, and `.git/` is read-only, so
-  an agent can edit and cannot commit no matter what it decides. OpenCode enforces it with
-  the shipped permission policy, in process, and a `permissions.json` that allows
-  `git commit *` would undo it. The default denies it; nothing stops you from overriding
-  your own guardrail. Use a `git worktree` when two agents might otherwise share a tree.
+- **Read-only is the default; `--write` is opt-in and provider-scoped.** codex enforces
+  `--cwd` in the kernel: an out-of-scope write fails, and `.git/` is read-only, so an agent
+  can edit and cannot commit no matter what it decides. Grok's documented Landlock/Seatbelt
+  sandbox puts it in the same broad tier, but it leaves `.git/` writable and has not been
+  measured here. Cursor is a harness whose sandbox is requested only under `--write`, and
+  whose failure to start is left loud rather than degraded to allowlist mode. OpenCode uses
+  the shipped permission policy in process: its allowlist narrows the hole and removes easy
+  paths, but is not a boundary. `echo`, `cat`, `sed -i`, `awk`, and `find -exec` remain
+  allowlisted, and under `--write` `node -e` and `python3 -c` are arbitrary execution. A
+  `permissions.json` that allows `git commit *` also undoes the commit denial — it is your
+  file. Treat `--cwd` as a strong convention there; the real boundary is the orchestrator
+  reviewing the diff before committing. Use a `git worktree` when two agents might
+  otherwise share a tree.
 - **Read access is NOT confined to `--cwd`.** A delegated model can read anything your
   user can — `.env`, `~/.aws/credentials`, shell history. By default it cannot send them
   anywhere (network is off unless you pass `--network`, which itself requires `--write`),
@@ -550,6 +681,12 @@ Both cost real debugging time and are commented in the source. Don't undo them.
    come *before* it. And it's `--tools ""`, not `--allowed-tools`, that disables
    everything — needed so Claude can't run bash to test its own code, an advantage the
    sandboxed providers don't have.
+3. **A relative directory used to be resolved twice.** `--cwd lib` became `lib/lib` for
+   providers that take their directory as a flag (`--workspace`, `--dir` or `--cwd`). It
+   is now made absolute and checked before the child starts.
+4. **A startup failure used to imply damage.** A child that touched nothing could produce
+   a partial-edits warning and a `--resume` suggestion. crossmodel checks the tree first
+   and says it **is UNCHANGED** when there is nothing to inspect.
 
 ---
 

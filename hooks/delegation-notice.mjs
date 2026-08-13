@@ -20,8 +20,14 @@ const EXTERNAL_BINS = Object.entries(PROVIDERS)
 
 const LABEL = {
   codex: 'OpenAI',
+  grok: 'xAI',
   gemini: 'Google',
   ollama: 'local hardware',
+  // Harnesses, not vendors. Naming the harness would answer the wrong question: with
+  // opencode the bill lands on OpenRouter or Ollama or whoever backs the model string, and
+  // with cursor it lands on the Cursor subscription regardless of whose model it is.
+  cursor: 'Cursor subscription',
+  opencode: "the backend's",
 };
 
 function inspect(command) {
@@ -45,8 +51,13 @@ function inspect(command) {
 
   // Path B: a provider CLI invoked directly, bypassing the wrapper.
   for (const bin of EXTERNAL_BINS) {
-    // Word-boundary match so `mycodex` or a path fragment does not trigger it.
-    if (!new RegExp(`(^|[\\s/;&|])${bin}\\b`).test(command)) continue;
+    // 🔴 THE BINARY MUST BE IN COMMAND POSITION, not merely present in the string.
+    // A plain word-boundary match fired on `grep -r codex lib/` and announced
+    // "delegating to (default) — spending OpenAI quota" for a local grep. A notice that
+    // lies is worse than no notice, and this hook exists precisely to be trusted.
+    // Command position = start of the string, or right after a separator (; && || | & or
+    // a newline), optionally preceded by a leading path.
+    if (!new RegExp(`(^|[;&|\\n]|&&|\\|\\|)\\s*(\\S*/)?${bin}(\\s|$)`).test(command)) continue;
     const provider = Object.entries(PROVIDERS).find(([, p]) => p.bin === bin)?.[0];
     const model = (command.match(/(?:-m|--model)[= ]+(\S+)/) || [])[1];
     return {

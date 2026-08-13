@@ -1,7 +1,7 @@
 {
   "name": "crossmodel",
-  "version": "0.10.0",
-  "description": "Delegate work from Claude Code to an external agentic CLI — OpenAI Codex, or OpenCode for OpenRouter, Ollama and anything OpenAI-compatible — spending that provider's quota instead of your Anthropic quota. They sweep your repo and write code in a scope you bound; you review and commit. Ships a deterministic benchmark so you route by evidence, a saver mode for when your quota is nearly spent, and a permission policy that keeps git history yours.",
+  "version": "0.11.0",
+  "description": "Delegate work from Claude Code to an external agentic CLI — OpenAI Codex, xAI Grok, the Cursor CLI, or OpenCode for OpenRouter, Ollama and anything OpenAI-compatible — spending that provider's quota instead of your Anthropic quota. They sweep your repo and write code in a scope you bound; you review and commit. Ships a deterministic benchmark so you route by evidence, a saver mode for when your quota is nearly spent, and a permission policy that keeps git history yours.",
   "author": {
     "name": "Marcelo",
     "url": "https://github.com/devloadingbr"
@@ -20,6 +20,9 @@
     "ollama",
     "benchmark",
     "quota",
-    "subagent"
+    "subagent",
+    "grok",
+    "xai",
+    "cursor"
   ]
 }

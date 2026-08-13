@@ -33,7 +33,7 @@ step 3 rather than redoing everything.
 ## Step 2 — detect installed providers
 
 ```bash
-for b in codex opencode gemini ollama claude; do
+for b in codex grok agent opencode gemini ollama claude; do
   printf '%-9s ' "$b"; command -v $b >/dev/null && echo installed || echo "not installed"
 done
 ```
@@ -43,6 +43,8 @@ For each **installed** provider, check authentication before going further:
 | Provider | Check | If not authenticated |
 |---|---|---|
 | `codex` | `codex login status` | Tell the user to run `codex login` themselves — it is an account OAuth flow and you must not do it for them |
+| `grok` | `grok models` | Tell the user to run `grok login` themselves (browser OAuth), or to export `XAI_API_KEY`. Needs a SuperGrok or X Premium+ subscription |
+| `agent` (Cursor) | `agent status` then `agent --list-models` | Tell the user to run `agent login` themselves (browser OAuth), or to export `CURSOR_API_KEY`. Never pass `--api-key` on a command line — it lands in `ps` for every user on the machine |
 | `opencode` | `opencode models` | Some models need no auth at all — the list includes free ones. For a paid provider (OpenRouter, OpenAI…) tell the user to run `opencode auth login` themselves; same principle |
 | `gemini` | provider's own auth command | same principle |
 | `ollama` | `ollama list` | no auth; if the list is empty they need to pull a model first |
@@ -53,6 +55,33 @@ model strings are `provider/model` exactly as `opencode models` prints them — 
 one. Its `--write` runs under the permission policy in `~/.claude/crossmodel/permissions.json`,
 which is enforced by OpenCode rather than by an OS sandbox; say so if the user asks whether
 it is as confined as codex, because it is not.
+
+`grok` is a third quota pool and the second provider with a real OS sandbox, so it belongs
+in the same tier as codex for write work. Two things to say out loud if it comes up:
+its argument shape in `providers.mjs` came from xAI's published docs and **has not been
+verified against a real run**, so the first call is the verification; and unlike codex it
+leaves `.git/` writable, so a `--write` run can commit — review `git log`, not only the diff.
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash   # or: npm install -g @xai-official/grok
+```
+
+The **Cursor CLI** (binary `agent`) is a fourth pool and often the cheapest one to add,
+because a Cursor subscription is something many people already pay for and it carries Grok,
+GPT, Claude and Kimi behind one bill. Verified working on `agent 2026.08.11`. Two things to
+say when you register it:
+
+- Reasoning effort is part of the model id (`cursor-grok-4.6-high`, `…-xhigh`, each with an
+  optional `-fast`), not a flag — so the alias IS the effort tier. `agent --list-models` is
+  the authority; never invent an id.
+- **Measured:** `--sandbox enabled` fails to start on stock Ubuntu (AppArmor), so `--write`
+  through this provider is refused on such a machine. Sweeps are unaffected. crossmodel
+  deliberately does not fall back to Cursor's allowlist mode — say so if the user asks why
+  their write run failed rather than degrading.
+
+```bash
+curl https://cursor.com/install -fsS | bash && agent login
+```
 
 If nothing is installed, stop and recommend one. The cheapest entry point is Codex,
 because it authenticates with a ChatGPT subscription rather than a metered API key:
@@ -77,8 +106,13 @@ Suggest **at least two tiers**, because the whole point is routing between them:
 
 ## Step 4 — write the config
 
-Write `crossmodel.config.json` next to `bench/providers.mjs` inside the plugin directory.
-Merge with what is already there; never clobber aliases the user already had.
+Write `~/.claude/crossmodel/crossmodel.config.json`. Merge with what is already there;
+never clobber aliases the user already had.
+
+🔴 **In `$HOME`, not in the plugin directory.** The plugin installs under a versioned path
+(`.../cache/<mkt>/<plugin>/<version>/`), so a config written there is destroyed by the next
+update and the user silently drops back to the built-in aliases. The plugin directory is
+still searched as a legacy fallback; if you find a config there, offer to move it.
 
 ```json
 {
