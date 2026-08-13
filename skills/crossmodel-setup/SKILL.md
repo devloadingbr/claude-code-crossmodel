@@ -52,15 +52,12 @@ For each **installed** provider, check authentication before going further:
 `opencode` is worth offering even when `codex` is present: it is provider-neutral, so it
 reaches OpenRouter, Ollama and any OpenAI-compatible endpoint through one adapter. Its
 model strings are `provider/model` exactly as `opencode models` prints them — never invent
-one. Its `--write` runs under the permission policy in `~/.claude/crossmodel/permissions.json`,
-which is enforced by OpenCode rather than by an OS sandbox; say so if the user asks whether
-it is as confined as codex, because it is not.
+one. Its `--write` runs under the policy in `~/.claude/crossmodel/permissions.json`, which
+allows the agent to work and denies git's writing verbs — nothing else.
 
-`grok` is a third quota pool and the second provider with a real OS sandbox, so it belongs
-in the same tier as codex for write work. Two things to say out loud if it comes up:
-its argument shape in `providers.mjs` came from xAI's published docs and **has not been
-verified against a real run**, so the first call is the verification; and unlike codex it
-leaves `.git/` writable, so a `--write` run can commit — review `git log`, not only the diff.
+`grok` is a third quota pool. One thing to say out loud: its argument shape in
+`providers.mjs` came from xAI's published docs and **has not been verified against a real
+run**, so the first call is the verification.
 
 ```bash
 curl -fsSL https://x.ai/cli/install.sh | bash   # or: npm install -g @xai-official/grok
@@ -74,10 +71,9 @@ say when you register it:
 - Reasoning effort is part of the model id (`cursor-grok-4.6-high`, `…-xhigh`, each with an
   optional `-fast`), not a flag — so the alias IS the effort tier. `agent --list-models` is
   the authority; never invent an id.
-- **Measured:** `--sandbox enabled` fails to start on stock Ubuntu (AppArmor), so `--write`
-  through this provider is refused on such a machine. Sweeps are unaffected. crossmodel
-  deliberately does not fall back to Cursor's allowlist mode — say so if the user asks why
-  their write run failed rather than degrading.
+- It writes freely inside `--cwd`, like every provider here. crossmodel imposes exactly one
+  rule anywhere — git history stays the orchestrator's — and permits everything the agent
+  needs to do the work and prove it: build, tests, package managers, the lot.
 
 ```bash
 curl https://cursor.com/install -fsS | bash && agent login

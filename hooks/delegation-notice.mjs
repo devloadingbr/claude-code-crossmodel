@@ -9,7 +9,7 @@
 // It only announces. It never blocks — a notice that can break your workflow would be
 // worse than no notice.
 
-import { MODELS, PROVIDERS } from '../bench/providers.mjs';
+import { MODELS, PROVIDERS } from '../lib/providers.mjs';
 
 // Provider binaries that mean "this call leaves the Anthropic quota pool".
 // `claude` is deliberately absent: that IS the Anthropic pool, and announcing it would

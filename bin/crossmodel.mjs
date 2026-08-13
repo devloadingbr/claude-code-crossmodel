@@ -20,7 +20,7 @@ import { readFileSync, existsSync, appendFileSync, writeFileSync, symlinkSync } 
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { callModel, MODELS, availableModels, capabilityError, DEFAULT_IDLE_MS } from '../bench/providers.mjs';
+import { callModel, MODELS, availableModels, capabilityError, DEFAULT_IDLE_MS } from '../lib/providers.mjs';
 import { readMode, writeMode, clearMode, parseUntil, describeUntil, MODE_PATH } from '../lib/mode.mjs';
 import { codexUsage, describeWindow, describeReset, bar } from '../lib/usage.mjs';
 import { teach } from '../lib/teach.mjs';
@@ -253,22 +253,20 @@ Options:
                      give them a repo and they grep and read it themselves, so you do
                      not have to paste code into the prompt.
   --write            let the model edit files inside --cwd (required with it). Off by
-                     default, and no network unless you also pass --network.
+                     default only because a sweep should not edit by accident — not
+                     because writing is a privilege. Writing is the job.
 
-                     ⚠️ HOW WELL "inside --cwd" HOLDS DEPENDS ON THE PROVIDER, and the
-                     difference is not cosmetic:
-                       codex   OS sandbox. A write outside fails at the syscall, and .git/
-                               is read-only, so it cannot commit whatever it decides.
-                       grok    OS sandbox (Landlock/Seatbelt) — but .git/ IS writable, so
-                               it can commit. Check "git log", not just the diff.
-                       opencode
-                               a permission policy, in process, and the shell gets around
-                               it. MEASURED: "echo x > /outside/file" from the agent's
-                               shell succeeded and wrote outside the directory. Treat the
-                               scope as a strong convention, not a boundary.
-                     Point --write at a throwaway worktree whichever you use, and review
-                     the diff. The orchestrator reviewing is what makes this safe — the
-                     provider's boundary is a second line, not the first.
+                     THE POLICY, everywhere, every provider: the agent works freely —
+                     reads, edits, runs the build, runs the tests — and does not touch
+                     git history. Committing is the orchestrator's, because a change in
+                     the working tree is a diff you can throw away and a commit is a fact
+                     other work builds on.
+
+                     That rule is a CONTRACT, not a lock. codex is the only provider that
+                     enforces it in the kernel (.git/ is read-only inside its sandbox);
+                     everywhere else a determined agent could reach git through a shell.
+                     The thing that actually protects you is reviewing the diff, so make
+                     that cheap: point --write at --worktree and read what came back.
   --worktree <dir>   create (or reuse) an isolated git worktree and use it as --cwd.
                      Requires --write. node_modules is symlinked in automatically, because
                      a worktree that cannot run the project's tests cannot verify its own
@@ -329,7 +327,7 @@ Write example — point it at an isolated worktree, review the diff yourself, co
   git -C /tmp/wt-feature diff        # you review
   git -C /tmp/wt-feature commit ...  # you commit
 
-Aliases are defined in bench/providers.mjs and can be extended or overridden with a
+Aliases are defined in lib/providers.mjs and can be extended or overridden with a
 crossmodel.config.json — see crossmodel.config.example.json.`);
   process.exit(argv.length ? 0 : 1);
 }
@@ -610,6 +608,12 @@ if (write && !cwd) {
 const network = has('network');
 const effort = flag('effort');
 const resume = flag('resume');
+
+// There was a `--unsandboxed` flag here for about an hour. It is gone, along with the
+// premise that produced it: crossmodel does not rank providers into confinement tiers and
+// does not withhold writing from an agent that was asked to write. Writing is the job. The
+// orchestrator reviewing the diff is the boundary, and a throwaway `--worktree` is how you
+// make that review cheap. See lib/permissions.mjs for the policy in one paragraph.
 // ── progress reporting ───────────────────────────────────────────────────────────────
 // Everything here goes to STDERR on purpose. stdout is the answer and nothing else —
 // that contract is what lets callers do `$(crossmodel ...)` and pipe into other tools.

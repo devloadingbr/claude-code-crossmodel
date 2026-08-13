@@ -9,7 +9,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'nod
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { callModel, MODELS, availableModels, extractJSON, extractCode } from './providers.mjs';
+import { callModel, MODELS, availableModels, extractJSON, extractCode } from '../lib/providers.mjs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i === -1 ? d : process.argv[i + 1]; };
