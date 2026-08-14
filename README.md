@@ -68,11 +68,53 @@ verification. The home-directory file is checked first; a plugin-local
 
 ---
 
+## Cursor as orchestrator
+
+The same CLI, the other way around: the Cursor agent calls Codex and the Claude Code CLI,
+spending *their* quota instead of this chat's.
+
+```bash
+# from this checkout, once per machine
+node bin/crossmodel.mjs install --host cursor
+```
+
+That writes four things in `$HOME`, never in a project repo:
+
+- a shim at `~/.local/bin/crossmodel` so the agent can find the binary (add that dir to PATH if it is not already)
+- an always-on user rule at `~/.cursor/rules/crossmodel.mdc` — call the CLI from Shell, do not use the Task `delegate` subagent to save quota
+- the setup skill at `~/.cursor/skills/crossmodel-setup/`
+- a user enforcement hook at `~/.cursor/hooks/crossmodel-enforce`, registered in `~/.cursor/hooks.json`, so native Grep/Glob/Task sweeps use the external CLI
+
+The hook denies native Grep and Glob, plus Task `explore`/`delegate`/`probe`; Grep of a
+single file still works so the director can review. Use `crossmodel install --host cursor
+--no-enforce` to skip or remove that gate, or set `CROSSMODEL_ENFORCE=0` to allow the
+native tools for a run.
+
+Enable **Settings → Rules, Skills, Subagents → Include third-party Plugins** so the Claude Code hooks (`#route`, saver mode, the delegation notice) load. New Cursor chats pick up the rule; the current one needs a restart.
+
+What the agent should type:
+
+```bash
+crossmodel --model luna --cwd <dir> "<self-contained question>"     # Codex
+crossmodel --model sonnet --cwd <dir> "<self-contained question>"   # Claude CLI
+```
+
+`luna` is the volume model. `sonnet` is a second pool when this chat is Cursor. Same contract as everywhere else: they write and prove; you review and commit.
+
+Project primer (opt-in, versioned — ask before running):
+
+```bash
+crossmodel teach --host cursor --dry-run    # would write ./AGENTS.md
+crossmodel teach --host cursor
+```
+
+---
+
 ## Package and tests
 
 The production runtime had no business living in a folder called `bench`, and it blocked
 packaging, so `bench/providers.mjs` moved to `lib/providers.mjs`. The npm package is
-`crossmodel-cli`: a real `bin` entry, zero dependencies, and `npm test`. 48 tests run
+`crossmodel-cli`: a real `bin` entry, zero dependencies, and `npm test`. 73 tests run
 under `node --test` (the script is `node --test test/*.test.mjs` — on Node 22 a bare
 directory argument discovers nothing). CI runs the tests plus `node --check` over every
 tracked `.mjs`. The suite caught a bug the same day it was written, where rewriting a
@@ -138,10 +180,10 @@ quota pool a turn is draining. A `PreToolUse` hook announces the moment the boun
 crossed:
 
 ```
-🔶 delegating to luna (gpt-5.6-luna) — spending OpenAI quota, not Anthropic · sweeping /myrepo
+🔶 delegating to luna (gpt-5.6-luna) — spending OpenAI quota, not this session's · sweeping /myrepo
 ```
 
-It stays silent for Anthropic models and for ordinary commands. It only announces; it
+It stays silent for same-pool calls (Claude Code → `claude`, Cursor → `cursor`) and for ordinary commands. It only announces; it
 never blocks.
 
 ### 2. Three subagents, three jobs

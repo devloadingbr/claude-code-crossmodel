@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { splice, BEGIN, END } from '../lib/teach.mjs';
+import { splice, BEGIN, END, teachTarget, primer } from '../lib/teach.mjs';
 
 const BLOCK = `${BEGIN}\nhello\n${END}`;
 const OTHER = `${BEGIN}\nworld\n${END}`;
@@ -72,5 +72,38 @@ describe('splice', () => {
     const r = splice(`${prefix}${BLOCK}${suffix}`, OTHER);
     assert.equal(r.action, 'updated');
     assert.equal(r.content, `${prefix}${OTHER}${suffix}`);
+  });
+});
+
+describe('teachTarget', () => {
+  const cwd = '/tmp/proj';
+
+  it('defaults to CLAUDE.md', () => {
+    assert.equal(teachTarget({ cwd }).path, '/tmp/proj/CLAUDE.md');
+    assert.equal(teachTarget({ host: 'claude', cwd }).path, '/tmp/proj/CLAUDE.md');
+  });
+
+  it('--host cursor selects AGENTS.md', () => {
+    assert.equal(teachTarget({ host: 'cursor', cwd }).path, '/tmp/proj/AGENTS.md');
+  });
+
+  it('--file wins over --host', () => {
+    assert.equal(
+      teachTarget({ host: 'cursor', file: '.cursor/rules/crossmodel.mdc', cwd }).path,
+      '/tmp/proj/.cursor/rules/crossmodel.mdc',
+    );
+  });
+
+  it('unknown host is an error, not a silent CLAUDE.md write', () => {
+    const r = teachTarget({ host: 'windsurf', cwd });
+    assert.ok(r.error);
+    assert.equal(r.path, undefined);
+  });
+});
+
+describe('primer', () => {
+  it('spends this session\'s quota, not a hardcoded Anthropic pool', () => {
+    assert.match(primer([]), /this session's/);
+    assert.doesNotMatch(primer([]), /the Anthropic one/);
   });
 });

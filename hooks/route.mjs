@@ -141,7 +141,7 @@ function renderSaver(mode, now) {
   const pref = mode.model ? mode.model : 'the cheapest model that clears the bar';
   return `<crossmodel_saver>
 QUOTA SAVER ACTIVE — ${describeUntil(mode.until, now)}.
-Anthropic quota is nearly spent. The external provider's is not. Spend theirs.
+This session's quota is nearly spent. The external provider's is not. Spend theirs.
 
 Default to delegating. If a delegatable step is NOT delegated, justify it in one line.
 

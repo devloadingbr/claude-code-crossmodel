@@ -23,6 +23,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Grep|Glob|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/enforce.mjs\"",
+            "timeout": 10
+          }
+        ]
       }
     ]
   }

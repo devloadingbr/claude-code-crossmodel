@@ -55,9 +55,15 @@ describe('capabilityError', () => {
     assertRefusal(capabilityError('luna', { write: true }), /cwd/);
   });
 
-  it('refuses --write on a provider whose supportsWrite is false', () => {
-    // cwd is set so the missing-cwd check does not fire first.
-    assertRefusal(capabilityError('opus', { write: true, cwd: '/tmp/work' }), /--write|write/);
+  it('gemini and ollama still have no write mode wired up', () => {
+    // They ship with no builtin alias (an alias that fails on first use is worse
+    // than none), so capabilityError cannot name them. The flag is the contract.
+    assert.equal(BUILTIN_PROVIDERS.gemini.supportsWrite, false);
+    assert.equal(BUILTIN_PROVIDERS.ollama.supportsWrite, false);
+  });
+
+  it('allows --write on claude when cwd is set', () => {
+    assert.equal(capabilityError('opus', { write: true, cwd: '/tmp/work' }), null);
   });
 
   it('refuses --effort on a provider without supportsEffort', () => {
@@ -134,6 +140,34 @@ describe('codex args', () => {
     assert.ok(dash !== -1, 'options must sit between resume and the session id');
     assert.ok(dash < sid);
     assert.ok(!args.includes('--sandbox'));
+  });
+});
+
+describe('claude args', () => {
+  const claude = BUILTIN_PROVIDERS.claude;
+
+  it('bench path (no cwd, no write) disables tools so the battery scores the model', () => {
+    const args = claude.args({ ...CTX, cwd: undefined, write: false, prompt: 'PROMPT' });
+    const i = args.indexOf('--tools');
+    assert.ok(i !== -1, 'missing --tools');
+    assert.equal(args[i + 1], '');
+    assert.ok(args.indexOf('PROMPT') < i, 'prompt must precede --tools (it is variadic)');
+    assert.ok(!args.includes('--dangerously-skip-permissions'));
+  });
+
+  it('a sweep (cwd, no write) skips permissions so headless can actually read the tree', () => {
+    // Measured 2026-08-13: without this, sonnet --cwd exited 0 asking the user to
+    // approve `ls`. A blocked sweep reported as success.
+    const args = claude.args({ ...CTX, cwd: '/tmp/work', write: false, prompt: 'PROMPT' });
+    assert.ok(!args.includes('--tools'), 'a sweep that cannot use tools cannot read the tree');
+    assert.ok(args.includes('--dangerously-skip-permissions'));
+    assert.ok(args.includes('PROMPT'));
+  });
+
+  it('a write run skips permissions so headless does not hang on a TTY prompt', () => {
+    const args = claude.args({ ...CTX, write: true, prompt: 'PROMPT' });
+    assert.ok(args.includes('--dangerously-skip-permissions'));
+    assert.ok(!args.includes('--tools'));
   });
 });
 

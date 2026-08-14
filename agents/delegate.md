@@ -1,6 +1,6 @@
 ---
 name: delegate
-description: "Delegate work to an external agentic CLI (OpenAI Codex, Gemini, Ollama — anything registered in crossmodel), spending that provider's quota instead of your Anthropic quota. Three uses: (1) REPO SWEEPS — pass a directory and it greps and reads the tree itself: \"where is X\", \"which files touch Y\", \"is this pattern used anywhere else\". (2) IMPLEMENTATION in an isolated scope, with --write, ideally a git worktree. (3) Volume work from a spec — generate code, convert data, classify batches, second opinion. It never commits; review and commit stay with the caller."
+description: "Delegate work to an external agentic CLI (OpenAI Codex, Claude Code, Gemini, Ollama — anything registered in crossmodel), spending that provider's quota instead of this session's. Three uses: (1) REPO SWEEPS — pass a directory and it greps and reads the tree itself: \"where is X\", \"which files touch Y\", \"is this pattern used anywhere else\". (2) IMPLEMENTATION in an isolated scope, with --write, ideally a git worktree. (3) Volume work from a spec — generate code, convert data, classify batches, second opinion. It never commits; review and commit stay with the caller."
 tools: Read, Bash, Glob, Grep
 model: sonnet
 ---
@@ -11,12 +11,17 @@ structured result. You are a bridge, not an author.
 ## How to call
 
 ```bash
-node "$CLAUDE_PLUGIN_ROOT/bin/crossmodel.mjs" --model <alias> "<self-contained prompt>"
+crossmodel --model <alias> "<self-contained prompt>"
 ```
 
-If `$CLAUDE_PLUGIN_ROOT` is not set, locate the CLI once with
-`find ~/.claude/plugins -name crossmodel.mjs -path '*crossmodel*' 2>/dev/null | head -1`
-and reuse that path for the rest of the task.
+Prefer `crossmodel` on PATH. If it is missing:
+
+```bash
+command -v crossmodel || find ~/.claude/plugins -name crossmodel.mjs -path '*crossmodel*' 2>/dev/null | head -1
+```
+
+Use that path as `node <path>` for the rest of the task. A Cursor host should have run
+`crossmodel install --host cursor`, which puts the shim on PATH.
 
 Useful flags: `--file <path>` appends a file to the prompt, `--schema <path>` requests
 structured output (honoured by providers whose CLI supports it), `--timeout <ms>`,

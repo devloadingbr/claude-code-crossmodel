@@ -23,7 +23,8 @@ import path from 'node:path';
 import { callModel, MODELS, availableModels, capabilityError, DEFAULT_IDLE_MS } from '../lib/providers.mjs';
 import { readMode, writeMode, clearMode, parseUntil, describeUntil, MODE_PATH } from '../lib/mode.mjs';
 import { codexUsage, describeWindow, describeReset, bar } from '../lib/usage.mjs';
-import { teach } from '../lib/teach.mjs';
+import { teach, teachTarget } from '../lib/teach.mjs';
+import { installCursor } from '../lib/install.mjs';
 
 const argv = process.argv.slice(2);
 
@@ -32,7 +33,7 @@ const argv = process.argv.slice(2);
 // here, which is the point: a flag the parser does not know about is a flag that silently
 // does nothing.
 const VALUE_FLAGS = new Set(['model', 'file', 'timeout', 'idle-timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree', 'log', 'link', 'prefer', 'until']);
-const BOOL_FLAGS = new Set(['write', 'network', 'quiet', 'no-stream', 'list', 'help', 'version', 'json', 'dry-run']);
+const BOOL_FLAGS = new Set(['write', 'network', 'quiet', 'no-stream', 'list', 'help', 'version', 'json', 'dry-run', 'no-enforce']);
 
 const flag = (name, fallback = null) => {
   const i = argv.indexOf(`--${name}`);
@@ -139,7 +140,12 @@ if (argv[0] === 'mode') {
 // plugin: CLAUDE.md is versioned and ships to everyone who clones the repo, so editing it
 // is the user's call, made once, in the open.
 if (argv[0] === 'teach') {
-  const target = path.resolve(flag('file') ?? 'CLAUDE.md');
+  const dest = teachTarget({ host: flag('host'), file: flag('file') });
+  if (dest.error) {
+    console.error(`crossmodel: ${dest.error}`);
+    process.exit(1);
+  }
+  const target = dest.path;
   const existed = existsSync(target);
 
   if (has('dry-run')) {
@@ -168,6 +174,53 @@ if (argv[0] === 'teach') {
     if (inRepo) console.error(`crossmodel: review it with \`git diff ${path.basename(target)}\` before committing.`);
     else if (existed) console.error('crossmodel: this file is not in a git repo — there is no undo but your own backup.');
   }
+  process.exit(0);
+}
+
+// ── `crossmodel install` ─────────────────────────────────────────────────────────────
+// Wire a host other than Claude Code. Explicit, like teach: never runs as a side
+// effect of npm install, because the files live in $HOME and are the user's.
+if (argv[0] === 'install') {
+  const host = flag('host');
+  if (!host) {
+    console.error('crossmodel: install needs --host. Currently: --host cursor');
+    process.exit(1);
+  }
+  if (host !== 'cursor') {
+    console.error(`crossmodel: unknown --host "${host}". Currently: cursor (Claude Code installs via the plugin).`);
+    process.exit(1);
+  }
+
+  const r = installCursor({ dryRun: has('dry-run'), noEnforce: has('no-enforce') });
+  if (!r.ok) {
+    console.error(`crossmodel: install failed — ${r.error}`);
+    process.exit(1);
+  }
+
+  if (has('dry-run')) {
+    console.error(`crossmodel: dry run — would write:`);
+    console.error(`  shim  ${r.shim}  (${r.actions.shim})`);
+    console.error(`  rule  ${r.rule}  (${r.actions.rule})`);
+    console.error(`  skill ${r.skill} (${r.actions.skill})`);
+    console.error(`  hookShim  ${r.hookShim}  (${r.actions.hookShim})`);
+    console.error(`  hooksJson ${r.hooksJson} (${r.actions.hooksJson})`);
+    console.error('crossmodel: Grep/Glob and Task explore|delegate|probe are denied; Read, Shell, and Grep of one file are not. --no-enforce skips/removes that gate.');
+    process.exit(0);
+  }
+
+  const alreadyUpToDate = ['shim', 'rule', 'skill', 'hookShim', 'hooksJson'].every((key) => r.actions[key] === 'unchanged' || r.actions[key] === 'skipped');
+  console.error(`crossmodel: Cursor host ${alreadyUpToDate ? 'already up to date' : 'installed'}`);
+  console.error(`  shim  ${r.shim}  (${r.actions.shim})`);
+  console.error(`  rule  ${r.rule}  (${r.actions.rule})  — always-on; Cursor agent will see it next session`);
+  console.error(`  skill ${r.skill} (${r.actions.skill})`);
+  console.error(`  hookShim  ${r.hookShim}  (${r.actions.hookShim})`);
+  console.error(`  hooksJson ${r.hooksJson} (${r.actions.hooksJson})`);
+  console.error('crossmodel: Grep/Glob and Task explore|delegate|probe are denied; Read, Shell, and Grep of one file are not. --no-enforce skips/removes that gate.');
+  if (r.pathHint) {
+    console.error(`crossmodel: ${path.dirname(r.shim)} is not on PATH. Add it, or the agent cannot find the binary.`);
+  }
+  console.error('crossmodel: enable Settings → Rules, Skills, Subagents → Include third-party Plugins so the Claude hooks (#route, saver, notice) load.');
+  console.error('crossmodel: new Cursor chats pick up the rule; this one needs a restart.');
   process.exit(0);
 }
 
@@ -220,16 +273,23 @@ if (has('help') || (!argv.length)) {
   crossmodel --list
   crossmodel usage [--json]
   crossmodel mode on|off|status
-  crossmodel teach [--file CLAUDE.md] [--dry-run]
+  crossmodel teach [--host cursor|claude] [--file CLAUDE.md] [--dry-run]
+  crossmodel install --host cursor [--dry-run] [--no-enforce]
 
-Teach — put a short primer in a project's CLAUDE.md:
-  crossmodel teach --dry-run     # print it, write nothing
-  crossmodel teach               # write it into ./CLAUDE.md
+Teach — put a short primer in a project's CLAUDE.md (or AGENTS.md with --host cursor):
+  crossmodel teach --dry-run              # print it, write nothing
+  crossmodel teach                        # write it into ./CLAUDE.md
+  crossmodel teach --host cursor          # write it into ./AGENTS.md
 
   Names the aliases that actually work on this machine, and covers what cannot be guessed
   from the code: exit-code semantics, which provider is genuinely sandboxed, and that
   delegated models never commit. Lives between BEGIN/END markers, so re-running updates
   it in place and deleting those lines removes it. Nothing outside the markers is touched.
+
+Install — wire Cursor as an orchestrator (user-level, $HOME only, never a project repo):
+  crossmodel install --host cursor        # shim on PATH, always-on rule, setup skill, enforcement hook
+  crossmodel install --host cursor --dry-run
+  crossmodel install --host cursor --no-enforce  # skip/remove the enforcement hook
 
 Usage — how much of the provider's quota is left:
   crossmodel usage
@@ -238,7 +298,7 @@ Usage — how much of the provider's quota is left:
   a run is still in flight. Add --json for scripting. Exit 2 when there is no data,
   because "no reading" must never be mistaken for "nothing used".
 
-Saver mode — for when your Anthropic quota is nearly spent:
+Saver mode — for when this session's quota is nearly spent:
   crossmodel mode on --until sunday --prefer luna
   crossmodel mode status
   crossmodel mode off
@@ -350,7 +410,7 @@ if (has('list')) {
 // `crossmodel moed status` would have sent "moed status" to a model and billed a real
 // call for a typo. Reported from the field: `crossmodel teach` on an older build answered
 // "--model is required", which explains nothing.
-const SUBCOMMANDS = ['mode', 'usage', 'teach'];
+const SUBCOMMANDS = ['mode', 'usage', 'teach', 'install'];
 const first = argv[0];
 if (first && !first.startsWith('--') && !flag('model') && /^[a-z][a-z-]*$/.test(first)) {
   console.error(`crossmodel: "${first}" is not a subcommand of this build (${VERSION}).`);

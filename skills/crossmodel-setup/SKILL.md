@@ -11,20 +11,34 @@ Do this **interactively and in order**. Never write a config for a provider you 
 confirmed is installed and answering — a config full of aliases that fail on first use is
 worse than an empty one.
 
-## Locate the plugin
+## Locate the CLI
 
-The CLI lives at `$CLAUDE_PLUGIN_ROOT/bin/crossmodel.mjs`. If that variable is not set:
+Prefer the binary on PATH:
 
 ```bash
+command -v crossmodel
+```
+
+If that works, `$CM` below is just `crossmodel`. If it does not:
+
+```bash
+# Claude Code plugin checkout
 find ~/.claude/plugins -name crossmodel.mjs -path '*crossmodel*' 2>/dev/null | head -1
 ```
 
-Use that path for the rest of the session. Everything below assumes `$CM` holds it.
+Use that path as `node "$CM"` for the rest of the session. On Cursor, run
+`crossmodel install --host cursor` (from this repo, `node bin/crossmodel.mjs install --host cursor`)
+so the next session has the shim on PATH, an always-on rule, and the user enforcement hook
+that sends native sweeps through `crossmodel`; Grep of a single file still works. Use
+`--no-enforce` to skip/remove that hook, or `CROSSMODEL_ENFORCE=0` to allow it temporarily.
+Do not keep looking up
+`$CLAUDE_PLUGIN_ROOT` — Cursor does not set it.
 
 ## Step 1 — see what is already there
 
 ```bash
-node "$CM" --list
+crossmodel --list
+# or: node "$CM" --list
 ```
 
 Aliases marked `ok` already work. If the user only wants to add one model, skip to
@@ -48,6 +62,7 @@ For each **installed** provider, check authentication before going further:
 | `opencode` | `opencode models` | Some models need no auth at all — the list includes free ones. For a paid provider (OpenRouter, OpenAI…) tell the user to run `opencode auth login` themselves; same principle |
 | `gemini` | provider's own auth command | same principle |
 | `ollama` | `ollama list` | no auth; if the list is empty they need to pull a model first |
+| `claude` | `claude --version` | Tell the user to run `claude auth login` themselves. Same pool Claude Code spends — a second pool when Cursor is the orchestrator |
 
 `opencode` is worth offering even when `codex` is present: it is provider-neutral, so it
 reaches OpenRouter, Ollama and any OpenAI-compatible endpoint through one adapter. Its
@@ -129,7 +144,8 @@ not in user config.
 For every alias you registered:
 
 ```bash
-node "$CM" --model <alias> "Reply with only the number: 6*7"
+crossmodel --model <alias> "Reply with only the number: 6*7"
+# or: node "$CM" --model <alias> "Reply with only the number: 6*7"
 ```
 
 Expect `42` and exit code 0. If it fails, fix the model ID or the auth and retry — **do
@@ -138,7 +154,7 @@ not leave a broken alias in the config**. Report exactly which aliases you verif
 Then confirm the capability that matters most:
 
 ```bash
-node "$CM" --model <alias> --cwd <some repo> "Name three files in this directory. List only."
+crossmodel --model <alias> --cwd <some repo> "Name three files in this directory. List only."
 ```
 
 If that works, the model can sweep a repo on its own quota, which is the main reason to
@@ -167,8 +183,16 @@ to everyone who clones the repo, and the user may not want plugin instructions c
 for teammates who do not have it installed.
 
 ```bash
-crossmodel teach --dry-run     # show them exactly what it adds
-crossmodel teach               # only after they say yes
+crossmodel teach --dry-run              # show them exactly what it adds
+crossmodel teach                        # CLAUDE.md, after they say yes
+crossmodel teach --host cursor          # AGENTS.md, same contract
+```
+
+If they are in Cursor, also offer (this one writes $HOME, not the repo):
+
+```bash
+crossmodel install --host cursor --dry-run
+crossmodel install --host cursor
 ```
 
 Re-running updates the block in place; deleting the marker lines removes it. Nothing
@@ -184,6 +208,9 @@ Tell the user:
 2. That `#route` in any prompt injects the routing policy for that turn.
 3. That a new plugin config is read at session start, so they should restart.
 4. That `node bench/battery.mjs --list` costs nothing, and a real run costs quota.
+5. If this is Cursor: `crossmodel install --host cursor` (once per machine) and enable
+   Settings → Rules, Skills, Subagents → Include third-party Plugins so the saver / `#route`
+   / notice hooks load. New chats pick up the always-on rule; this one needs a restart.
 
 ## Rules
 
