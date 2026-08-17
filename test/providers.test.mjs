@@ -66,6 +66,14 @@ describe('capabilityError', () => {
     assert.equal(capabilityError('opus', { write: true, cwd: '/tmp/work' }), null);
   });
 
+  it('allows --write on Antigravity when cwd is set', () => {
+    assert.equal(capabilityError('gem', { write: true, cwd: '/tmp/work' }), null);
+  });
+
+  it('refuses --network on Antigravity', () => {
+    assertRefusal(capabilityError('gem', { network: true, write: true, cwd: '/tmp/work' }), /--network|network/);
+  });
+
   it('refuses --effort on a provider without supportsEffort', () => {
     assertRefusal(capabilityError('cgrok', { effort: 'high' }), /--effort|effort/);
   });
@@ -168,6 +176,58 @@ describe('claude args', () => {
     const args = claude.args({ ...CTX, write: true, prompt: 'PROMPT' });
     assert.ok(args.includes('--dangerously-skip-permissions'));
     assert.ok(!args.includes('--tools'));
+  });
+});
+
+describe('agy args', () => {
+  const agy = BUILTIN_PROVIDERS.agy;
+
+  it('puts the prompt as the value of -p, not as a trailing positional', () => {
+    // Measured 2026-08-17: -p consumes the next token. Flags after the prompt.
+    const args = agy.args({ ...CTX, cwd: undefined, write: false, schemaPath: undefined, prompt: 'PROMPT' });
+    assert.deepEqual(args, ['-p', 'PROMPT', '--model', 'test-model', '--output-format', 'text']);
+    assert.ok(!args.includes('--dangerously-skip-permissions'));
+    assert.ok(!args.includes('--mode'));
+    assert.ok(!args.includes('--add-dir'));
+  });
+
+  it('plans a sweep and skips permissions when cwd is set', () => {
+    const args = agy.args({ ...CTX, cwd: '/tmp/work', write: false, schemaPath: undefined, prompt: 'PROMPT' });
+    assert.deepEqual(args.slice(0, 6), ['-p', 'PROMPT', '--model', 'test-model', '--output-format', 'text']);
+    assert.ok(args.includes('--add-dir') && args[args.indexOf('--add-dir') + 1] === '/tmp/work');
+    assert.ok(args.includes('--dangerously-skip-permissions'));
+    assert.deepEqual(args.slice(args.indexOf('--mode'), args.indexOf('--mode') + 2), ['--mode', 'plan']);
+  });
+
+  it('accepts edits on a write run and skips permissions', () => {
+    const args = agy.args({ ...CTX, write: true, schemaPath: undefined, prompt: 'PROMPT' });
+    assert.equal(args[0], '-p');
+    assert.equal(args[1], 'PROMPT');
+    assert.ok(args.includes('--dangerously-skip-permissions'));
+    const i = args.indexOf('--mode');
+    assert.deepEqual(args.slice(i, i + 2), ['--mode', 'accept-edits']);
+  });
+
+  it('maps effort, schema and resume modes to Antigravity flags', () => {
+    const options = agy.args({
+      ...CTX,
+      prompt: 'PROMPT',
+      effort: 'high',
+      schemaPath: '/tmp/schema.json',
+      resume: 'last',
+    });
+    assert.ok(options.includes('--effort') && options[options.indexOf('--effort') + 1] === 'high');
+    assert.ok(options.includes('--json-schema') && options[options.indexOf('--json-schema') + 1] === '/tmp/schema.json');
+    assert.ok(options.includes('--continue'));
+    assert.ok(!options.includes('last'), '--continue takes no session id');
+    assert.equal(options[0], '-p');
+    assert.equal(options[1], 'PROMPT');
+
+    const session = agy.args({ ...CTX, prompt: 'PROMPT', resume: 'sess-abc' });
+    assert.ok(session.includes('--conversation'));
+    assert.equal(session[session.indexOf('--conversation') + 1], 'sess-abc');
+    assert.equal(session[0], '-p');
+    assert.equal(session[1], 'PROMPT');
   });
 });
 

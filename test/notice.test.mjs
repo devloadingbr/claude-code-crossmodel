@@ -32,6 +32,11 @@ describe('samePool', () => {
     assert.equal(samePool('codex', 'cursor'), false);
     assert.equal(samePool('cursor', 'unknown'), false);
   });
+
+  it('Antigravity is never same-pool with Cursor or Claude Code', () => {
+    assert.equal(samePool('agy', 'cursor'), false);
+    assert.equal(samePool('agy', 'claude'), false);
+  });
 });
 
 describe('inspect', () => {
@@ -56,6 +61,12 @@ describe('inspect', () => {
     assert.equal(hit.quota, 'Anthropic');
   });
 
+  it('announces Cursor calling gem with Antigravity quota', () => {
+    const hit = inspect('crossmodel --model gem "hi"', cursor);
+    assert.equal(hit.provider, 'agy');
+    assert.equal(hit.quota, 'Antigravity');
+  });
+
   it('stays silent for Cursor calling cgrok', () => {
     assert.equal(inspect('crossmodel --model cgrok "hi"', cursor), null);
   });
@@ -75,6 +86,13 @@ describe('inspect', () => {
     const hit = inspect('claude -p "hi"', cursor);
     assert.equal(hit.direct, true);
     assert.equal(hit.provider, 'claude');
+  });
+
+  it('announces a direct agy call from Cursor', () => {
+    const hit = inspect('agy -p --model gemini-3.7-flash-high "hi"', cursor);
+    assert.equal(hit.direct, true);
+    assert.equal(hit.provider, 'agy');
+    assert.equal(hit.quota, 'Antigravity');
   });
 });
 

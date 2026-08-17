@@ -47,7 +47,7 @@ step 3 rather than redoing everything.
 ## Step 2 — detect installed providers
 
 ```bash
-for b in codex grok agent opencode gemini ollama claude; do
+for b in codex grok agent opencode gemini agy ollama claude; do
   printf '%-9s ' "$b"; command -v $b >/dev/null && echo installed || echo "not installed"
 done
 ```
@@ -61,6 +61,7 @@ For each **installed** provider, check authentication before going further:
 | `agent` (Cursor) | `agent status` then `agent --list-models` | Tell the user to run `agent login` themselves (browser OAuth), or to export `CURSOR_API_KEY`. Never pass `--api-key` on a command line — it lands in `ps` for every user on the machine |
 | `opencode` | `opencode models` | Some models need no auth at all — the list includes free ones. For a paid provider (OpenRouter, OpenAI…) tell the user to run `opencode auth login` themselves; same principle |
 | `gemini` | provider's own auth command | same principle |
+| `agy` | `agy models` | Tell the user to log in via the Antigravity CLI themselves |
 | `ollama` | `ollama list` | no auth; if the list is empty they need to pull a model first |
 | `claude` | `claude --version` | Tell the user to run `claude auth login` themselves. Same pool Claude Code spends — a second pool when Cursor is the orchestrator |
 

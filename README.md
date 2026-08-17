@@ -95,11 +95,11 @@ Enable **Settings → Rules, Skills, Subagents → Include third-party Plugins**
 What the agent should type:
 
 ```bash
-crossmodel --model luna --cwd <dir> "<self-contained question>"     # Codex
-crossmodel --model sonnet --cwd <dir> "<self-contained question>"   # Claude CLI
+crossmodel --model luna --cwd <dir> "<self-contained question>"
+crossmodel --model luna --cwd <dir> --write --worktree /tmp/wt-<slice> "<spec>. Run the tests. Do not commit."
 ```
 
-`luna` is the volume model. `sonnet` is a second pool when this chat is Cursor. Same contract as everywhere else: they write and prove; you review and commit.
+House setup: Grok 4.6 directs, luna does everything else. Anthropic (`sonnet` / `opus` / `haiku`) only when the user names Claude this turn. Same contract: they write and prove; you review and commit.
 
 Project primer (opt-in, versioned — ask before running):
 
@@ -553,6 +553,9 @@ including how a sandbox flag maps to `write`.
 Built in: `codex`, `grok`, `cursor`, `opencode`, `gemini`, `ollama`, and `claude` (as the
 benchmark baseline). Of those, `cursor` is verified by a real run and `grok` is
 documentation-only.
+
+The `gem` alias is Gemini 3.7 Flash High through the Antigravity CLI (`agy`), billed to
+Antigravity rather than Cursor.
 
 ### Grok Build: xAI's agentic CLI
 
