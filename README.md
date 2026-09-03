@@ -354,7 +354,7 @@ crossmodel --model luna --worktree /tmp/wt-feature --write --network \
   setting did *not* confine anything: the agent overwrote a file in the cwd regardless.
   It looks like a safety boundary and isn't one.
 - `--effort <level>` picks reasoning effort in the provider's own vocabulary (codex:
-  `minimal|low|medium|high|xhigh`). A provider without the control **errors** instead of
+  `minimal|low|medium|high|xhigh|max` — `max` sits above `xhigh`). A provider without the control **errors** instead of
   silently ignoring it — believing a run reasoned harder than it did is worse than an error.
 - `--worktree <dir>` creates an isolated git worktree and uses it as `--cwd`. An existing
   path is reused only after it is **verified to be a linked worktree** — an ordinary
@@ -554,8 +554,24 @@ Built in: `codex`, `grok`, `cursor`, `opencode`, `gemini`, `ollama`, and `claude
 benchmark baseline). Of those, `cursor` is verified by a real run and `grok` is
 documentation-only.
 
-The `gem` alias is Gemini 3.7 Flash High through the Antigravity CLI (`agy`), billed to
+The `gem` alias is Gemini 3.8 Flash High through the Antigravity CLI (`agy`), billed to
 Antigravity rather than Cursor.
+
+🔴 **`gem` has no 5-minute ceiling — that was ours, and it is fixed.** Measured 2026-09-03: a
+repo sweep died at 307s with `exit 1: Error: timeout waiting for response`, and two sessions
+independently concluded "Gemini tops out around five minutes, use it only for short closed
+questions". Both were wrong. `agy` has a `--print-timeout` flag defaulting to **5m0s**, and it
+is a deadline on the whole run rather than on silence — the exact thing this project refuses to
+do with its own timers (see `DEFAULT_IDLE_MS` in `lib/providers.mjs`). crossmodel never passed
+the flag, so every `gem` call inherited five minutes and reported a healthy run as a hung one.
+
+crossmodel now passes `--print-timeout 4h`. Override with `AGY_PRINT_TIMEOUT` in agy's duration
+syntax (`45m`, `2h`) when you deliberately want a shorter leash — for an unattended batch, say.
+`agy` offers no way to disable the deadline, so it is pushed far out rather than guessed at.
+
+The lesson generalises past this one flag: **when a provider CLI dies on a round number, suspect
+the wrapper before the model.** A model that ran out of capacity does not stop at exactly 300
+seconds.
 
 ### Grok Build: xAI's agentic CLI
 

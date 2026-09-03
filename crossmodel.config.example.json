@@ -25,7 +25,7 @@
   "_comment_opencode": "opencode is provider-neutral: it reaches OpenRouter, Ollama, OpenAI, Google and anything OpenAI-compatible through one adapter, so the model string is 'provider/model' as opencode spells it. Run 'opencode models' to see what your install offers. It supports --write under the permission policy in ~/.claude/crossmodel/permissions.json.",
 
   "_example_opencode": {
-    "free":   { "provider": "opencode", "model": "opencode/deepseek-v4-flash-free" },
+    "free":   { "provider": "opencode", "model": "opencode/ling-3.0-flash-fin-free" },
     "router": { "provider": "opencode", "model": "openrouter/deepseek/deepseek-v3" }
   }
 }
