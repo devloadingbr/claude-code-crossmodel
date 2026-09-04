@@ -555,7 +555,10 @@ benchmark baseline). Of those, `cursor` is verified by a real run and `grok` is
 documentation-only.
 
 The `gem` alias is Gemini 3.8 Flash High through the Antigravity CLI (`agy`), billed to
-Antigravity rather than Cursor.
+Antigravity rather than Cursor. It shares second-opinion / adversarial spec-and-plan
+review duty with `glm` (OpenCode Go) — rotate between the two rather than always
+reaching for the same one, so the load spreads across both quota pools instead of
+draining one.
 
 🔴 **`gem` has no 5-minute ceiling — that was ours, and it is fixed.** Measured 2026-09-03: a
 repo sweep died at 307s with `exit 1: Error: timeout waiting for response`, and two sessions
@@ -610,9 +613,12 @@ need their own login (`opencode auth login -p opencode`, pastes an API key — n
 browser flow). `qwen` (`opencode-go/qwen3.8-flash`) and `glm`
 (`opencode-go/glm-5.3-flash`) ship as the two verified Go aliases: both confirmed
 zero-day retention and no model training in Go's own privacy table (2026-09-04), and
-both real-call-tested. `qwen` is the volume tier; `glm` is for a second opinion / spec
-review. Go's Muse Spark Contributor models are deliberately NOT aliased — that tier
-trains on your prompts, which is a bad trade when `--cwd` is a real repo.
+both real-call-tested. `qwen` is the volume tier. `glm` and `gem` (Gemini 3.8 Flash
+High, via the separate Antigravity CLI — see below) share second-opinion / adversarial
+spec-and-plan-review duty — rotate between the two rather than defaulting to one, so
+neither provider's quota alone carries every adversarial pass. Go's Muse Spark
+Contributor models are deliberately NOT aliased — that tier trains on your prompts,
+which is a bad trade when `--cwd` is a real repo.
 
 **Its boundary is a policy, not a sandbox.** OpenCode has no OS sandbox; it has a
 permission layer, and that layer only checks arguments it can see. A path handed to the

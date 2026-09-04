@@ -87,7 +87,8 @@ if (argv[0] === 'mode') {
     if (!m.active) { console.log('saver mode: OFF'); process.exit(0); }
     console.log(`saver mode: ON — ${describeUntil(m.until, now)}${m.model ? `, preferring "${m.model}"` : ''}`);
     if (m.fallback) console.log(`fallback (when "${m.model ?? 'the preferred model'}" is out of quota): ${m.fallback}`);
-    if (m.secondOpinion) console.log(`second opinion / adversarial review: always ${m.secondOpinion}`);
+    if (Array.isArray(m.secondOpinion) && m.secondOpinion.length === 1) console.log(`second opinion / adversarial review: always ${m.secondOpinion[0]}`);
+    else if (Array.isArray(m.secondOpinion) && m.secondOpinion.length > 1) console.log(`second opinion / adversarial review: rotate across ${m.secondOpinion.join(', ')} — distribute the load, never the same one every time`);
     console.log(`state: ${MODE_PATH}`);
     process.exit(0);
   }
@@ -118,8 +119,12 @@ if (argv[0] === 'mode') {
 
     const model = flag('prefer');
     const fallback = flag('fallback');
-    const secondOpinion = flag('second-opinion');
-    for (const [label, alias] of [['--prefer', model], ['--fallback', fallback], ['--second-opinion', secondOpinion]]) {
+    // Comma-separated so more than one model can share second-opinion duty — e.g.
+    // "glm,gem" rotates adversarial spec review across two different providers instead
+    // of hammering the same one's quota every time.
+    const secondOpinionRaw = flag('second-opinion');
+    const secondOpinion = secondOpinionRaw ? secondOpinionRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    for (const [label, alias] of [['--prefer', model], ['--fallback', fallback], ...secondOpinion.map((a) => ['--second-opinion', a])]) {
       if (alias && !MODELS[alias]) {
         console.error(`crossmodel: unknown model "${alias}" for ${label}. Known: ${Object.keys(MODELS).join(', ')}`);
         process.exit(1);
@@ -131,12 +136,13 @@ if (argv[0] === 'mode') {
       until,
       model: model ?? null,
       fallback: fallback ?? null,
-      secondOpinion: secondOpinion ?? null,
+      secondOpinion,
       startedAt: now.toISOString(),
     });
     console.log(`saver mode: ON — ${describeUntil(until, now)}${model ? `, preferring "${model}"` : ''}`);
     if (fallback) console.log(`fallback (when "${model ?? 'the preferred model'}" is out of quota): ${fallback}`);
-    if (secondOpinion) console.log(`second opinion / adversarial review: always ${secondOpinion}`);
+    if (secondOpinion.length === 1) console.log(`second opinion / adversarial review: always ${secondOpinion[0]}`);
+    else if (secondOpinion.length > 1) console.log(`second opinion / adversarial review: rotate across ${secondOpinion.join(', ')} — distribute the load, never the same one every time`);
     console.log('Every turn now carries a short "delegate by default" reminder. Turn it off with: crossmodel mode off');
     process.exit(0);
   }
@@ -314,7 +320,7 @@ Usage — how much of the provider's quota is left:
   because "no reading" must never be mistaken for "nothing used".
 
 Saver mode — for when this session's quota is nearly spent:
-  crossmodel mode on --until sunday --prefer luna --fallback qwen --second-opinion glm
+  crossmodel mode on --until sunday --prefer luna --fallback qwen --second-opinion glm,gem
   crossmodel mode status
   crossmodel mode off
 
@@ -324,9 +330,10 @@ Saver mode — for when this session's quota is nearly spent:
   --fallback names the alias to use when --prefer's own quota runs out (codex-backed
   aliases like luna/sol/terra share one ChatGPT quota; qwen/glm run on the separate
   OpenCode Go subscription, so they stay up when codex is out).
-  --second-opinion names the alias that ALWAYS reviews specs and plans adversarially —
-  a different provider than the one that wrote the thing, every time, not just when the
-  preferred model is unavailable.
+  --second-opinion names the alias(es) that review specs and plans adversarially — a
+  different provider than the one that wrote the thing, every time, not just when the
+  preferred model is unavailable. Comma-separate more than one (e.g. glm,gem) to rotate
+  adversarial review across providers instead of spending one model's quota alone.
 
 Options:
   --model <alias>    which model (see --list)

@@ -142,9 +142,12 @@ function renderSaver(mode, now) {
   const fallbackLine = mode.fallback
     ? `\nIf "${pref}" is out of quota, fall back to ${mode.fallback} instead of coming back to this session's own quota.\n`
     : '';
-  const secondOpinionLine = mode.secondOpinion
-    ? `\nSecond opinion / adversarial review of a spec or plan: always ${mode.secondOpinion}, not "${pref}" — a second opinion from the same model that wrote the thing checks nothing.\n`
-    : '';
+  const secondOpinions = Array.isArray(mode.secondOpinion) ? mode.secondOpinion : (mode.secondOpinion ? [mode.secondOpinion] : []);
+  const secondOpinionLine = secondOpinions.length === 1
+    ? `\nSecond opinion / adversarial review of a spec or plan: always ${secondOpinions[0]}, not "${pref}" — a second opinion from the same model that wrote the thing checks nothing.\n`
+    : secondOpinions.length > 1
+      ? `\nSecond opinion / adversarial review of a spec or plan: ${secondOpinions.join(' or ')}, never "${pref}" — a second opinion from the same model that wrote the thing checks nothing. ROTATE between ${secondOpinions.join(' and ')} across calls; do not default to the same one every time, the point is distributing load across both.\n`
+      : '';
   return `<crossmodel_saver>
 QUOTA SAVER ACTIVE — ${describeUntil(mode.until, now)}.
 This session's quota is nearly spent. The external provider's is not. Spend theirs.
