@@ -604,6 +604,16 @@ OpenAI, Google and anything OpenAI-compatible all arrive through a single adapte
 harness and model stop being welded together. The `flash` alias ships working out of the
 box with no API key and no cost; `opencode models` lists what your install offers.
 
+**OpenCode Go** (`opencode.ai/go`, $10/mo flat) is a separate paid tier behind the same
+`opencode` binary — model ids get an `opencode-go/` prefix instead of `opencode/`, and
+need their own login (`opencode auth login -p opencode`, pastes an API key — no OAuth
+browser flow). `qwen` (`opencode-go/qwen3.8-flash`) and `glm`
+(`opencode-go/glm-5.3-flash`) ship as the two verified Go aliases: both confirmed
+zero-day retention and no model training in Go's own privacy table (2026-09-04), and
+both real-call-tested. `qwen` is the volume tier; `glm` is for a second opinion / spec
+review. Go's Muse Spark Contributor models are deliberately NOT aliased — that tier
+trains on your prompts, which is a bad trade when `--cwd` is a real repo.
+
 **Its boundary is a policy, not a sandbox.** OpenCode has no OS sandbox; it has a
 permission layer, and that layer only checks arguments it can see. A path handed to the
 Write tool is checked. The same path inside `printf 'x' > /outside/file` is not — to the

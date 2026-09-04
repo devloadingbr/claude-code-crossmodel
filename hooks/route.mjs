@@ -139,12 +139,18 @@ OBLIGATIONS
 // not a briefing. The full policy is still one `#route` away.
 function renderSaver(mode, now) {
   const pref = mode.model ? mode.model : 'the cheapest model that clears the bar';
+  const fallbackLine = mode.fallback
+    ? `\nIf "${pref}" is out of quota, fall back to ${mode.fallback} instead of coming back to this session's own quota.\n`
+    : '';
+  const secondOpinionLine = mode.secondOpinion
+    ? `\nSecond opinion / adversarial review of a spec or plan: always ${mode.secondOpinion}, not "${pref}" — a second opinion from the same model that wrote the thing checks nothing.\n`
+    : '';
   return `<crossmodel_saver>
 QUOTA SAVER ACTIVE — ${describeUntil(mode.until, now)}.
 This session's quota is nearly spent. The external provider's is not. Spend theirs.
 
 Default to delegating. If a delegatable step is NOT delegated, justify it in one line.
-
+${fallbackLine}${secondOpinionLine}
 Delegate by default (prefer ${pref}):
 - "where is X" / "which files touch Y" / "does this pattern exist" — sweep with --cwd,
   do not Read and Grep your way there yourself

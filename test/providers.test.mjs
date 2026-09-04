@@ -185,7 +185,7 @@ describe('agy args', () => {
   it('puts the prompt as the value of -p, not as a trailing positional', () => {
     // Measured 2026-08-17: -p consumes the next token. Flags after the prompt.
     const args = agy.args({ ...CTX, cwd: undefined, write: false, schemaPath: undefined, prompt: 'PROMPT' });
-    assert.deepEqual(args, ['-p', 'PROMPT', '--model', 'test-model', '--output-format', 'text']);
+    assert.deepEqual(args, ['-p', 'PROMPT', '--model', 'test-model', '--output-format', 'text', '--print-timeout', '4h']);
     assert.ok(!args.includes('--dangerously-skip-permissions'));
     assert.ok(!args.includes('--mode'));
     assert.ok(!args.includes('--add-dir'));

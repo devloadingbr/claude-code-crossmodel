@@ -32,7 +32,7 @@ const argv = process.argv.slice(2);
 // REFUSED rather than skipped — see the check further down. Adding a flag means adding it
 // here, which is the point: a flag the parser does not know about is a flag that silently
 // does nothing.
-const VALUE_FLAGS = new Set(['model', 'file', 'timeout', 'idle-timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree', 'log', 'link', 'prefer', 'until']);
+const VALUE_FLAGS = new Set(['model', 'file', 'timeout', 'idle-timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree', 'log', 'link', 'prefer', 'fallback', 'second-opinion', 'until']);
 const BOOL_FLAGS = new Set(['write', 'network', 'quiet', 'no-stream', 'list', 'help', 'version', 'json', 'dry-run', 'no-enforce']);
 
 const flag = (name, fallback = null) => {
@@ -86,6 +86,8 @@ if (argv[0] === 'mode') {
     if (m.expired) { clearMode(); console.log(`saver mode: OFF (expired ${new Date(m.until).toLocaleString()})`); process.exit(0); }
     if (!m.active) { console.log('saver mode: OFF'); process.exit(0); }
     console.log(`saver mode: ON — ${describeUntil(m.until, now)}${m.model ? `, preferring "${m.model}"` : ''}`);
+    if (m.fallback) console.log(`fallback (when "${m.model ?? 'the preferred model'}" is out of quota): ${m.fallback}`);
+    if (m.secondOpinion) console.log(`second opinion / adversarial review: always ${m.secondOpinion}`);
     console.log(`state: ${MODE_PATH}`);
     process.exit(0);
   }
@@ -115,13 +117,26 @@ if (argv[0] === 'mode') {
     }
 
     const model = flag('prefer');
-    if (model && !MODELS[model]) {
-      console.error(`crossmodel: unknown model "${model}". Known: ${Object.keys(MODELS).join(', ')}`);
-      process.exit(1);
+    const fallback = flag('fallback');
+    const secondOpinion = flag('second-opinion');
+    for (const [label, alias] of [['--prefer', model], ['--fallback', fallback], ['--second-opinion', secondOpinion]]) {
+      if (alias && !MODELS[alias]) {
+        console.error(`crossmodel: unknown model "${alias}" for ${label}. Known: ${Object.keys(MODELS).join(', ')}`);
+        process.exit(1);
+      }
     }
 
-    writeMode({ active: true, until, model: model ?? null, startedAt: now.toISOString() });
+    writeMode({
+      active: true,
+      until,
+      model: model ?? null,
+      fallback: fallback ?? null,
+      secondOpinion: secondOpinion ?? null,
+      startedAt: now.toISOString(),
+    });
     console.log(`saver mode: ON — ${describeUntil(until, now)}${model ? `, preferring "${model}"` : ''}`);
+    if (fallback) console.log(`fallback (when "${model ?? 'the preferred model'}" is out of quota): ${fallback}`);
+    if (secondOpinion) console.log(`second opinion / adversarial review: always ${secondOpinion}`);
     console.log('Every turn now carries a short "delegate by default" reminder. Turn it off with: crossmodel mode off');
     process.exit(0);
   }
@@ -299,13 +314,19 @@ Usage — how much of the provider's quota is left:
   because "no reading" must never be mistaken for "nothing used".
 
 Saver mode — for when this session's quota is nearly spent:
-  crossmodel mode on --until sunday --prefer luna
+  crossmodel mode on --until sunday --prefer luna --fallback qwen --second-opinion glm
   crossmodel mode status
   crossmodel mode off
 
   While it is on, every turn carries a short "delegate by default" reminder instead of
   waiting for the #route trigger. --until accepts 6h, 2d, a weekday, or an ISO date, and
   the mode expires on its own so it cannot be left on by accident.
+  --fallback names the alias to use when --prefer's own quota runs out (codex-backed
+  aliases like luna/sol/terra share one ChatGPT quota; qwen/glm run on the separate
+  OpenCode Go subscription, so they stay up when codex is out).
+  --second-opinion names the alias that ALWAYS reviews specs and plans adversarially —
+  a different provider than the one that wrote the thing, every time, not just when the
+  preferred model is unavailable.
 
 Options:
   --model <alias>    which model (see --list)
