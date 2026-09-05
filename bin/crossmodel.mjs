@@ -25,6 +25,9 @@ import { readMode, writeMode, clearMode, parseUntil, describeUntil, MODE_PATH } 
 import { codexUsage, describeWindow, describeReset, bar } from '../lib/usage.mjs';
 import { teach, teachTarget } from '../lib/teach.mjs';
 import { installCursor } from '../lib/install.mjs';
+import { readRoles, resolveRole, quotaGroupOf, unknownAliases, ROLES_PATH } from '../lib/roles.mjs';
+import { readCircuit, writeCircuit, classifyFailure, parseQuotaResetMs, recordFailure, recordSuccess, isGroupOpen, CIRCUIT_PATH } from '../lib/circuit.mjs';
+import { treeSignature } from '../lib/git.mjs';
 
 const argv = process.argv.slice(2);
 
@@ -32,7 +35,7 @@ const argv = process.argv.slice(2);
 // REFUSED rather than skipped — see the check further down. Adding a flag means adding it
 // here, which is the point: a flag the parser does not know about is a flag that silently
 // does nothing.
-const VALUE_FLAGS = new Set(['model', 'file', 'timeout', 'idle-timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree', 'log', 'link', 'prefer', 'fallback', 'second-opinion', 'until']);
+const VALUE_FLAGS = new Set(['model', 'role', 'file', 'timeout', 'idle-timeout', 'schema', 'cwd', 'effort', 'resume', 'worktree', 'log', 'link', 'prefer', 'fallback', 'second-opinion', 'until']);
 const BOOL_FLAGS = new Set(['write', 'network', 'quiet', 'no-stream', 'list', 'help', 'version', 'json', 'dry-run', 'no-enforce']);
 
 const flag = (name, fallback = null) => {
@@ -148,6 +151,35 @@ if (argv[0] === 'mode') {
   }
 
   console.error(`crossmodel: unknown "mode" subcommand "${sub}". Use: on | off | status`);
+  process.exit(1);
+}
+
+// ── `crossmodel role` ────────────────────────────────────────────────────────────────
+// Inspect what --role would actually do right now, without spending a call. Separate
+// from `mode` on purpose: saver mode is a session-wide bias toward delegating at all;
+// roles are the standing "who does what" map, active whether saver mode is on or not.
+if (argv[0] === 'role') {
+  const sub = argv[1] ?? 'status';
+  if (sub === 'status') {
+    const roles = readRoles();
+    if (roles.error) { console.error(`crossmodel: ${roles.error}`); process.exit(2); }
+    const circuitNow = readCircuit();
+    if (circuitNow.error) { console.error(`crossmodel: ${circuitNow.error}`); process.exit(2); }
+    const now = new Date();
+    for (const [name, def] of Object.entries(roles.roles)) {
+      const bad = unknownAliases(def.order, MODELS);
+      console.log(`${name} (${def.policy}): ${def.order.join(' -> ')}${bad.length ? `  [unknown: ${bad.join(', ')}]` : ''}`);
+      for (const alias of def.order) {
+        const group = quotaGroupOf(alias, MODELS);
+        const open = group && isGroupOpen(circuitNow, group, now);
+        if (open) console.log(`  ${alias} (${group}): OPEN until ${circuitNow.groups[group].openUntil ?? 'manual clear'}`);
+      }
+    }
+    console.log(`state: ${ROLES_PATH}`);
+    console.log(`circuit: ${CIRCUIT_PATH}`);
+    process.exit(0);
+  }
+  console.error(`crossmodel: unknown "role" subcommand "${sub}". Use: status`);
   process.exit(1);
 }
 
@@ -291,11 +323,30 @@ if (has('help') || (!argv.length)) {
   crossmodel --model <alias> "<prompt>"
   crossmodel --model <alias> --file <path> "<instruction>"
   crossmodel --model <alias> --cwd <dir> "<sweep instruction>"
+  crossmodel --role <name> --cwd <dir> "<sweep instruction>"
   crossmodel --list
   crossmodel usage [--json]
   crossmodel mode on|off|status
+  crossmodel role status
   crossmodel teach [--host cursor|claude] [--file CLAUDE.md] [--dry-run]
   crossmodel install --host cursor [--dry-run] [--no-enforce]
+
+Role-based routing — "who does what" instead of naming a model each time:
+  crossmodel --role write --cwd <dir> "..."     # ordered fallback (priority)
+  crossmodel --role review --cwd <dir> "..."    # alternates every call (round-robin)
+  crossmodel role status
+
+  Configured via the /crossmodel-select skill, written to
+  ~/.claude/crossmodel/roles.json (defaults: write = luna->qwen, review = glm/gem
+  alternating, explore = qwen->flash). Before dispatching, a candidate whose QUOTA GROUP
+  is already known to be exhausted is skipped — sol/terra/luna/astra share one codex
+  quota; qwen/glm share one OpenCode Go quota; a failure on one marks the whole group,
+  not just that alias. A quota failure THIS call is recorded for the NEXT "--role" call
+  to route around; it does not chain through the rest of the order within one
+  invocation — re-running is a deliberate step, not an automatic retry, specifically so a
+  failed --write run never gets silently retried on top of a partially-edited tree.
+  claude (opus/sonnet/haiku) is never a default candidate in any role — it shares this
+  session's own quota, so routing to it defeats the point.
 
 Teach — put a short primer in a project's CLAUDE.md (or AGENTS.md with --host cursor):
   crossmodel teach --dry-run              # print it, write nothing
@@ -438,7 +489,7 @@ if (has('list')) {
 // `crossmodel moed status` would have sent "moed status" to a model and billed a real
 // call for a typo. Reported from the field: `crossmodel teach` on an older build answered
 // "--model is required", which explains nothing.
-const SUBCOMMANDS = ['mode', 'usage', 'teach', 'install'];
+const SUBCOMMANDS = ['mode', 'usage', 'teach', 'install', 'role'];
 const first = argv[0];
 if (first && !first.startsWith('--') && !flag('model') && /^[a-z][a-z-]*$/.test(first)) {
   console.error(`crossmodel: "${first}" is not a subcommand of this build (${VERSION}).`);
@@ -448,9 +499,43 @@ if (first && !first.startsWith('--') && !flag('model') && /^[a-z][a-z-]*$/.test(
   process.exit(1);
 }
 
-const alias = flag('model');
+const roleName = flag('role');
+const explicitAlias = flag('model');
+if (roleName && explicitAlias) {
+  console.error('crossmodel: pass --model or --role, not both.');
+  process.exit(1);
+}
+
+// Circuit state is read once, up front, so both the round-robin pointer advance and any
+// later success/failure recording land in the SAME read-modify-write — two separate
+// writes across one invocation would let the second clobber the first.
+let circuit = readCircuit();
+if (circuit.error) { console.error(`crossmodel: ${circuit.error}`); process.exit(2); }
+
+let alias = explicitAlias;
+let dispatchedGroup = null; // set only when --role resolved this call, for post-dispatch bookkeeping
+if (roleName) {
+  const roles = readRoles();
+  if (roles.error) { console.error(`crossmodel: ${roles.error}`); process.exit(1); }
+  const def = roles.roles[roleName];
+  if (!def) {
+    console.error(`crossmodel: unknown role "${roleName}". Known: ${Object.keys(roles.roles).join(', ')}`);
+    process.exit(1);
+  }
+  const resolved = resolveRole(roleName, def, MODELS, circuit, new Date());
+  circuit = resolved.circuitState ?? circuit;
+  writeCircuit(circuit); // persist the round-robin advance now, even if resolution or the call below fails
+  if (resolved.error) {
+    console.error(`crossmodel: ${resolved.error}`);
+    process.exit(2);
+  }
+  alias = resolved.alias;
+  dispatchedGroup = resolved.group;
+  if (!has('quiet')) console.error(`crossmodel: role "${roleName}" → ${alias} (${resolved.reason})`);
+}
+
 if (!alias) {
-  console.error('crossmodel: --model is required. Run --list to see options.');
+  console.error('crossmodel: --model or --role is required. Run --list to see options.');
   process.exit(1);
 }
 if (!MODELS[alias]) {
@@ -750,23 +835,7 @@ const MARK = {
 // fine. So silence itself gets reported.
 const HEARTBEAT_MS = 60_000;
 let lastEventAt = Date.now();
-/**
- * A cheap fingerprint of everything git can see change in `dir`, including untracked
- * files. Returns null when there is nothing to compare against — outside a git repo — and
- * null must be read as "unknown", never as "unchanged".
- */
-function treeSignature(dir) {
-  if (!dir) return null;
-  const run = (args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', timeout: 15_000 });
-  if (run(['rev-parse', '--git-dir']).status !== 0) return null;
-  // --porcelain covers modified, staged, deleted and untracked. HEAD catches the case of
-  // an agent that committed despite being told not to: history moved even if the tree
-  // looks identical afterwards.
-  const status = run(['status', '--porcelain', '--untracked-files=all']);
-  const head = run(['rev-parse', 'HEAD']);
-  if (status.status !== 0) return null;
-  return `${head.stdout ?? ''} ${status.stdout ?? ''}`;
-}
+// treeSignature moved to lib/git.mjs (role-based fallback needs it too, and the copy here had a stray NUL byte in its separator).
 
 let filesWritten = 0;
 const heartbeat = setInterval(() => {
@@ -824,6 +893,7 @@ if (!r.ok) {
   // Only after a run that actually STARTED. A pre-flight guard (unknown flag, provider
   // without write support) spawns nothing, so telling the caller to inspect the tree for
   // half-applied edits sends them hunting for damage that cannot exist.
+  let partialWrite = false;
   if (write && r.started !== false) {
     // Before scaring the caller, ask the tree. A child that died on startup — a sandbox
     // that would not initialise, a bad flag, a failed auth — spawned and exited without
@@ -837,11 +907,48 @@ if (!r.ok) {
     if (untouched) {
       console.error(`crossmodel: ${cwd} is UNCHANGED — the run failed before writing anything.`);
     } else {
+      partialWrite = true;
       console.error(`crossmodel: ${cwd} may hold PARTIAL edits — check \`git -C ${cwd} status\` before rerunning.`);
       console.error('crossmodel: to continue where it stopped instead of starting cold: --resume last');
     }
   }
+
+  // Role dispatch: interpret the failure into the circuit breaker (external review,
+  // gpt-6-astra, 2026-09-04 — classify the signal, don't just count everything the same
+  // way). Quota trips the group open on ONE occurrence; auth never trips it at all,
+  // because that means "you are not logged in", not "this pool is empty"; anything else
+  // counts toward the ambiguous-failure window.
+  if (dispatchedGroup) {
+    // r.stderr only exists after a real spawned-and-closed process; a pre-flight refusal
+    // or a timeout only has r.error. Check both so neither failure shape goes unclassified.
+    const signal = { stderr: `${r.stderr ?? ''}\n${r.error ?? ''}`, stdout: r.text ?? '' };
+    const kind = classifyFailure(signal);
+    const resetMs = kind === 'quota' ? parseQuotaResetMs(signal) : null;
+    circuit = recordFailure(circuit, dispatchedGroup, kind, new Date(), resetMs ? { quotaCooldownMs: resetMs } : {});
+    writeCircuit(circuit);
+    if (kind === 'quota') {
+      const g = circuit.groups[dispatchedGroup];
+      console.error(`crossmodel: quota group "${dispatchedGroup}" marked OPEN until ${g.openUntil} — the next "--role ${roleName}" call skips it.`);
+    } else if (kind === 'ambiguous') {
+      const n = circuit.groups[dispatchedGroup]?.failWindow?.length ?? 0;
+      console.error(`crossmodel: ambiguous failure recorded for quota group "${dispatchedGroup}" (${n} in the current window) — not treated as quota exhaustion yet.`);
+    } else {
+      console.error(`crossmodel: failure looks like an AUTH/config problem, not quota — "${dispatchedGroup}" was NOT marked open. Fix the login, do not just retry with a different alias.`);
+    }
+    if (partialWrite) {
+      console.error(`crossmodel: DO NOT re-run "--role ${roleName}" blindly — it would dispatch a FRESH attempt at the same task on top of a partially-written tree. Inspect the diff first.`);
+    }
+  }
+
   process.exit(2);
+}
+
+// A successful call is the only thing that fully clears a quota group's failure history —
+// a group that was open because of a burst of ambiguous failures deserves to be trusted
+// again once one call actually gets through.
+if (dispatchedGroup) {
+  circuit = recordSuccess(circuit, dispatchedGroup);
+  writeCircuit(circuit);
 }
 
 if (!has('quiet')) {

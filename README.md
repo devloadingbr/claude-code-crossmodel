@@ -246,7 +246,35 @@ through the `delegate` subagent.** That subagent is itself a Claude model — us
 save Anthropic quota spends Anthropic quota. It earns its cost when the output is large or
 the batch is long, and not before.
 
-### 5. `crossmodel teach` — tell the project this exists
+### 5. Role-based routing — "who does what", not "which alias by name"
+
+```bash
+crossmodel --role write --cwd <dir> "..."
+crossmodel --role review --cwd <dir> "..."
+crossmodel role status
+```
+
+`/crossmodel-select` writes `~/.claude/crossmodel/roles.json`: a named job (`write`,
+`review`, `explore`, ...) mapped to an ordered list of aliases and a policy. `priority`
+tries aliases in order and falls through on failure — `write: luna, qwen`. `round-robin`
+alternates every call on purpose — `review: glm, gem`, so a spec never gets reviewed by
+whatever wrote it.
+
+Fallback is QUOTA-GROUP aware, not alias-aware: `sol`/`terra`/`luna`/`astra` share one
+codex quota, `qwen`/`glm` share one OpenCode Go quota, and a confirmed quota failure marks
+the whole group open — falling back from `luna` to `sol` on a codex error would try the
+same empty pool twice. Failure is also *classified*, not just counted (design input:
+external review by gpt-6-astra, 2026-09-04): an unambiguous quota/rate-limit message
+opens the group on ONE occurrence; an auth/config error never opens it at all (that means
+"fix your login", not "route around this"); anything else counts toward a rolling
+ambiguous-failure window before tripping. `claude` (opus/sonnet/haiku) is never a default
+candidate in any role — it shares this session's own quota.
+
+Scope, stated plainly: a quota failure is recorded for the **next** `--role` call to route
+around, not chained through mid-invocation — re-running is a deliberate step, so a failed
+`--write` never gets silently retried on top of a partially-edited tree.
+
+### 6. `crossmodel teach` — tell the project this exists
 
 A future session opening your repo has no idea crossmodel is installed, so it does the
 mechanical lookups itself and spends your quota doing it.
