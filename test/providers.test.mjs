@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import os from 'node:os';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import {
   BUILTIN_MODELS,
   BUILTIN_PROVIDERS,
@@ -176,6 +178,58 @@ describe('claude args', () => {
     const args = claude.args({ ...CTX, write: true, prompt: 'PROMPT' });
     assert.ok(args.includes('--dangerously-skip-permissions'));
     assert.ok(!args.includes('--tools'));
+  });
+});
+
+describe('claude-api (API key, read-only)', () => {
+  const api = BUILTIN_PROVIDERS['claude-api'];
+
+  it('haiku55 is Haiku 5.5 on the API-key provider', () => {
+    assert.deepEqual(BUILTIN_MODELS.haiku55, { provider: 'claude-api', model: 'claude-haiku-5-5' });
+  });
+
+  it('authenticates only through the apiKeyHelper and never carries the key itself', () => {
+    const args = api.args({ ...CTX, prompt: 'PROMPT', effort: 'high' });
+    assert.ok(args.includes('--bare'), '--bare is what keeps the subscription login out');
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+    assert.match(settings.apiKeyHelper, /^cat '.+'$/);
+    assert.ok(!args.some((a) => /sk-ant-/.test(a)));
+  });
+
+  it('is read-only by construction: restricted, Read/Grep/Glob only, permissions on', () => {
+    const args = api.args({ ...CTX, prompt: 'PROMPT' });
+    assert.ok(args.includes('--restricted'));
+    assert.equal(args[args.length - 2], '--tools', '--tools is variadic: it must come last');
+    assert.equal(args[args.length - 1], 'Read,Grep,Glob');
+    assert.ok(!args.includes('--dangerously-skip-permissions'));
+  });
+
+  it('passes --effort through', () => {
+    const args = api.args({ ...CTX, prompt: 'PROMPT', effort: 'high' });
+    assert.equal(args[args.indexOf('--effort') + 1], 'high');
+  });
+
+  it('refuses --write', () => {
+    assert.match(capabilityError('haiku55', { cwd: '/tmp/work', write: true }), /write/);
+  });
+
+  it('refuses before spawn when the key file is missing or not private', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'cm-key-'));
+    const file = path.join(dir, 'k');
+    const prev = process.env.CROSSMODEL_ANTHROPIC_KEY_FILE;
+    process.env.CROSSMODEL_ANTHROPIC_KEY_FILE = file;
+    try {
+      assert.match(capabilityError('haiku55', { cwd: '/tmp/work' }), /no Anthropic API key file/);
+      writeFileSync(file, 'x');
+      chmodSync(file, 0o644);
+      assert.match(capabilityError('haiku55', { cwd: '/tmp/work' }), /chmod 600/);
+      chmodSync(file, 0o600);
+      assert.equal(capabilityError('haiku55', { cwd: '/tmp/work' }), null);
+    } finally {
+      if (prev === undefined) delete process.env.CROSSMODEL_ANTHROPIC_KEY_FILE;
+      else process.env.CROSSMODEL_ANTHROPIC_KEY_FILE = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
