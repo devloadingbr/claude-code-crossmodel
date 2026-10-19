@@ -27,7 +27,7 @@ import { teach, teachTarget } from '../lib/teach.mjs';
 import { installCursor } from '../lib/install.mjs';
 import { readRoles, resolveRole, quotaGroupOf, unknownAliases, ROLES_PATH } from '../lib/roles.mjs';
 import { readCircuit, writeCircuit, classifyFailure, parseQuotaResetMs, recordFailure, recordSuccess, isGroupOpen, CIRCUIT_PATH } from '../lib/circuit.mjs';
-import { treeSignature } from '../lib/git.mjs';
+import { touchedSince, treeSignature } from '../lib/git.mjs';
 
 const argv = process.argv.slice(2);
 
@@ -870,6 +870,7 @@ if (reportProgress || logPath) {
 // edits as they happen; for the rest the tree itself has to be asked. Cheap, and it runs
 // before the model does anything.
 const treeBefore = write ? treeSignature(cwd) : null;
+const runStartedAt = Date.now();
 
 const r = await callModel(alias, prompt, {
   timeoutMs,
@@ -977,13 +978,19 @@ process.stdout.write(r.text);
 //     provider that has no event output — the exact hole this check exists to close.
 if (write) {
   const treeAfter = r.streamed ? null : treeSignature(cwd);
-  const wroteNothing = r.streamed
+  const noSignal = r.streamed
     ? filesWritten === 0
     // 🔴 treeAfter === null must NOT read as "unchanged" and must not read as "wrote
     // something" either. If git fails after the run — a lock, a .git the agent moved — the
     // comparison is unknowable, and defaulting either way is a guess presented as a fact.
     // The `!r.streamed && treeAfter === null` branch below is the one that says so.
     : treeBefore !== null && treeAfter !== null && treeAfter === treeBefore;
+  // Neither the edit events nor git see a file written through the shell into an ignored
+  // folder (a `.work/` report): before calling it a no-op, ask the filesystem by mtime.
+  // `undefined` (find failed) keeps the old verdict rather than guessing.
+  const touched = noSignal ? touchedSince(cwd, runStartedAt) : null;
+  const wroteNothing = noSignal && !touched;
+  if (noSignal && touched) console.error(`crossmodel: no edit event, but ${touched} changed during the run — counting it as written.`);
 
   if (wroteNothing) {
     console.error('crossmodel: the run succeeded but wrote NO files — read the answer before treating this as done.');
