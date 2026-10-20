@@ -12,3 +12,6 @@ routing.json
 node_modules/
 *.log
 .DS_Store
+
+# crossmodel enxame output (slices, logs, joined lines) — run-specific
+.work/
