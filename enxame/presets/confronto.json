@@ -1,0 +1,17 @@
+{
+  "prompt": "Propósito: {proposito}. Pergunta do diretor: {pergunta}\n\nVocê é uma fatia de uma varredura maior, feita por muitas fatias em paralelo (commit {sha}). Leia SOMENTE estes arquivos:\n{arquivos}\n\nCite código de fora da fatia apenas como evidência, sem varrê-lo. Grave o resultado em {saida}: um objeto JSON por linha (JSONL), sem cercas de código, sem comentário, nada além do arquivo. Confronte cada afirmação verificável dos documentos da fatia com o código. Chaves por linha: arquivo (o documento), id (identificador curto da afirmação), veredito (vale | divergente | fora | superado | limpo), motivo (uma frase) e evidencia (lista de citações arquivo:linha do código que prova o veredito). Use \"fora\" quando a afirmação não é verificável no código, \"superado\" quando o código seguiu outro caminho. Não classifique como \"fora\" por cautela: procure no código antes. Todo arquivo da fatia precisa de ao menos uma linha, mesmo sem achado: {\"arquivo\": \"<caminho>\", \"veredito\": \"limpo\"}. Toda citação arquivo:linha (caminho a partir da raiz do repo) tem de apontar para uma linha que existe. Ao terminar, responda só \"feito\".",
+  "chaves": [
+    "arquivo",
+    "id",
+    "veredito",
+    "motivo",
+    "evidencia"
+  ],
+  "vereditos": [
+    "vale",
+    "divergente",
+    "fora",
+    "superado",
+    "limpo"
+  ]
+}

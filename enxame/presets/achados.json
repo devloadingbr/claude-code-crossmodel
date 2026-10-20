@@ -1,0 +1,17 @@
+{
+  "prompt": "Propósito: {proposito}. Pergunta do diretor: {pergunta}\n\nVocê é uma fatia de uma varredura maior, feita por muitas fatias em paralelo (commit {sha}). Leia SOMENTE estes arquivos:\n{arquivos}\n\nCite código de fora da fatia apenas como evidência, sem varrê-lo. Grave o resultado em {saida}: um objeto JSON por linha (JSONL), sem cercas de código, sem comentário, nada além do arquivo. Procure defeitos de qualidade e segurança. Chaves por linha: arquivo, linha (número), severidade (🔴 confirmado | 🟡 risco | 🟣 inconsistência | 🔵 melhoria | limpo), titulo (uma frase) e evidencia (lista de citações arquivo:linha). Só reporte o que você leu no código; nada de achado por suposição. Todo arquivo da fatia precisa de ao menos uma linha, mesmo sem achado: {\"arquivo\": \"<caminho>\", \"severidade\": \"limpo\"}. Toda citação arquivo:linha (caminho a partir da raiz do repo) tem de apontar para uma linha que existe. Ao terminar, responda só \"feito\".",
+  "chaves": [
+    "arquivo",
+    "linha",
+    "severidade",
+    "titulo",
+    "evidencia"
+  ],
+  "vereditos": [
+    "🔴",
+    "🟡",
+    "🟣",
+    "🔵",
+    "limpo"
+  ]
+}

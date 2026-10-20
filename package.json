@@ -24,6 +24,7 @@
     ".claude-plugin",
     "cursor",
     "bench",
+    "enxame",
     "routing.example.json",
     "crossmodel.config.example.json",
     "README.md",

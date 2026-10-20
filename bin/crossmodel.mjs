@@ -17,7 +17,7 @@
 // consuming this must check the exit code before trusting stdout.
 
 import { readFileSync, existsSync, appendFileSync, writeFileSync, symlinkSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { callModel, MODELS, availableModels, capabilityError, DEFAULT_IDLE_MS } from '../lib/providers.mjs';
@@ -183,6 +183,67 @@ if (argv[0] === 'role') {
   process.exit(1);
 }
 
+// ── `crossmodel enxame <plano.json>` ─────────────────────────────────────────────────
+// One big sweep cut into small fatias, each read by one run of this same binary, in parallel.
+// The orchestration (slicing, pool, validation, retry, join, summary) lives in lib/enxame.mjs;
+// only the real launcher is here. Exit: 0 ok, 4 finished with failed fatias, 2 invalid plan,
+// 1 error of the enxame itself. Spec: D2091.
+if (argv[0] === 'enxame') {
+  const planoPath = argv[1];
+  if (!planoPath || planoPath.startsWith('--')) {
+    console.error('crossmodel: enxame needs a plan file. Use: crossmodel enxame <plano.json>');
+    process.exit(1);
+  }
+  const { lerPlano, rodarEnxame } = await import('../lib/enxame.mjs');
+  const lido = lerPlano(path.resolve(planoPath));
+  if (!lido.ok) { console.error(`crossmodel: ${lido.erro}`); process.exit(2); }
+  const self = fileURLToPath(import.meta.url);
+  // Live children, so a SIGINT/SIGTERM of the enxame does not leave up to 20 --write runs behind.
+  const filhos = new Set();
+  for (const [sinal, codigo] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    process.on(sinal, () => {
+      for (const f of filhos) f.kill('SIGTERM');
+      process.exit(codigo);
+    });
+  }
+  const lancar = (job) => new Promise((resolve) => {
+    // --quiet: progress (with model text) goes only to the log, so stderr carries just errors for ehLimiteDeTaxa
+    const args = [self, '--quiet', '--model', job.alias, '--effort', job.effort, '--cwd', job.cwd];
+    if (job.timeoutMs) args.push('--timeout', String(job.timeoutMs));
+    if (job.write) args.push('--write');
+    args.push('--log', job.log);
+    if (job.resume) args.push('--resume', job.resume);
+    args.push(job.prompt);
+    const filho = spawn(process.execPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    filhos.add(filho);
+    let stderr = '';
+    filho.stderr.on('data', (d) => { stderr += d; });
+    filho.on('error', (e) => { filhos.delete(filho); resolve({ codigo: null, stderr: `spawn falhou: ${e.message}`, log: '' }); });
+    filho.on('close', (codigo) => {
+      filhos.delete(filho);
+      let log = '';
+      try {
+        log = readFileSync(job.log, 'utf8');
+      } catch (e) {
+        stderr += `\n(sem log em ${job.log}: ${e.message})`;
+      }
+      resolve({ codigo, stderr: stderr.slice(-4000), log });
+    });
+  });
+  const r = await rodarEnxame(lido.valor, {
+    lancar,
+    relogio: () => Date.now(),
+    dormir: (ms) => new Promise((res) => setTimeout(res, ms)),
+    aliases: Object.keys(MODELS),
+  });
+  if (r.erro) console.error(`crossmodel: ${r.erro}`);
+  // stdout is a pipe: exit() before the flush would truncate the summary. exitCode is set, and
+  // the exit waits for the write callback because the code below this block must not run.
+  process.exitCode = r.codigo;
+  process.stdout.write(`${r.linhas.join('\n')}\n`, () => process.exit(r.codigo));
+  await new Promise(() => {});
+}
+
 // ── `crossmodel usage` ───────────────────────────────────────────────────────────────
 // The number behind the whole premise. "Spend their quota instead of yours" is a claim
 // you cannot check without it — and an empty pool announces itself as a refused run in
@@ -328,6 +389,7 @@ if (has('help') || (!argv.length)) {
   crossmodel usage [--json]
   crossmodel mode on|off|status
   crossmodel role status
+  crossmodel enxame <plano.json>   # wide sweep: many small parallel runs, one summary
   crossmodel teach [--host cursor|claude] [--file CLAUDE.md] [--dry-run]
   crossmodel install --host cursor [--dry-run] [--no-enforce]
 
@@ -489,7 +551,7 @@ if (has('list')) {
 // `crossmodel moed status` would have sent "moed status" to a model and billed a real
 // call for a typo. Reported from the field: `crossmodel teach` on an older build answered
 // "--model is required", which explains nothing.
-const SUBCOMMANDS = ['mode', 'usage', 'teach', 'install', 'role'];
+const SUBCOMMANDS = ['mode', 'usage', 'teach', 'install', 'role', 'enxame'];
 const first = argv[0];
 if (first && !first.startsWith('--') && !flag('model') && /^[a-z][a-z-]*$/.test(first)) {
   console.error(`crossmodel: "${first}" is not a subcommand of this build (${VERSION}).`);
