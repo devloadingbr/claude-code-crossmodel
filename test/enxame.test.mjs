@@ -442,3 +442,9 @@ test('limite de taxa só vale no stderr: "429" no log do modelo é falha comum, 
     assert.match(r.linhas.join('\n'), /processo saiu com código 1: capability refused: no write/);
   });
 });
+
+test('placar conta "🟡 risco" sob a marca 🟡 do preset', () => {
+  const linhas = [{ arquivo: 'a', severidade: '🟡 risco' }, { arquivo: 'b', severidade: '🟡' }, { arquivo: 'c', severidade: 'limpo' }];
+  const r = resumo({ id: 'ex-a', fatias: [], linhas, preset: { chaves: ['severidade'], vereditos: ['🔴', '🟡', 'limpo'] } });
+  assert.ok(r.join('\n').includes('🟡 2'), r.join('\n'));
+});
