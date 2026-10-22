@@ -349,3 +349,21 @@ describe('extractCode', () => {
     assert.equal(extractCode('just a sentence about nothing in particular.'), null);
   });
 });
+
+describe('blockedAliases (retired aliases stay retired for every caller)', async () => {
+  const { blockedAliases } = await import('../lib/providers.mjs');
+  it('reads the inline list and a dotted path in another JSON file, with ~ resolved', () => {
+    const seen = [];
+    const readJson = (p) => { seen.push(p); return { crossmodel: { mortos: ['gem-m', 'sonnet-ag'] } }; };
+    const r = blockedAliases({ blocked: ['grok'], blocked_from: { file: '~/.claude/casa/papeis.json', path: 'crossmodel.mortos' } }, { readJson, home: '/h' });
+    assert.deepEqual([...r.blocked.keys()].sort(), ['gem-m', 'grok', 'sonnet-ag']);
+    assert.deepEqual(seen, ['/h/.claude/casa/papeis.json']);
+    assert.deepEqual(r.errors, []);
+  });
+  it('says why when blocked_from cannot be used, never skips in silence', () => {
+    assert.match(blockedAliases({ blocked_from: { file: '/x.json', path: 'a.b' } }, { readJson: () => { throw new Error('ENOENT'); } }).errors[0], /ENOENT/);
+    assert.match(blockedAliases({ blocked_from: { file: '/x.json', path: 'a.b' } }, { readJson: () => ({ a: { b: 'x' } }) }).errors[0], /not a list/);
+    assert.match(blockedAliases({ blocked_from: { file: 1 } }).errors[0], /needs/);
+    assert.equal(blockedAliases({}).blocked.size, 0);
+  });
+});

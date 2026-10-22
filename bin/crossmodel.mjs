@@ -20,7 +20,9 @@ import { readFileSync, existsSync, appendFileSync, writeFileSync, symlinkSync } 
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { callModel, MODELS, availableModels, capabilityError, DEFAULT_IDLE_MS } from '../lib/providers.mjs';
+import { callModel, MODELS, BLOCKED, availableModels, capabilityError, DEFAULT_IDLE_MS } from '../lib/providers.mjs';
+// Retired aliases (lib/providers.mjs, blockedAliases) leave the table before anything resolves an alias.
+for (const retiredAlias of BLOCKED.keys()) delete MODELS[retiredAlias];
 import { readMode, writeMode, clearMode, parseUntil, describeUntil, MODE_PATH } from '../lib/mode.mjs';
 import { codexUsage, describeWindow, describeReset, bar } from '../lib/usage.mjs';
 import { teach, teachTarget } from '../lib/teach.mjs';
@@ -598,6 +600,10 @@ if (roleName) {
 
 if (!alias) {
   console.error('crossmodel: --model or --role is required. Run --list to see options.');
+  process.exit(1);
+}
+if (BLOCKED.has(alias)) {
+  console.error(`crossmodel: model "${alias}" is retired (${BLOCKED.get(alias)}). Known: ${Object.keys(MODELS).join(', ')}`);
   process.exit(1);
 }
 if (!MODELS[alias]) {
