@@ -1,5 +1,5 @@
 {
-  "prompt": "Propósito: {proposito}. Pergunta do diretor: {pergunta}\n\nVocê é uma fatia de uma varredura maior, feita por muitas fatias em paralelo (commit {sha}). Leia SOMENTE estes arquivos:\n{arquivos}\n\nCite código de fora da fatia apenas como evidência, sem varrê-lo. Grave o resultado em {saida}: um objeto JSON por linha (JSONL), sem cercas de código, sem comentário, nada além do arquivo. Inventarie se cada arquivo está em uso. Chaves por linha: arquivo, veredito (vivo | morto | legado | limpo), quem_usa (lista de arquivos que o importam ou chamam; vazia se ninguém) e evidencia (lista de citações arquivo:linha, como o import). Procure os usos com busca no repo antes de dizer \"morto\". Todo arquivo da fatia precisa de ao menos uma linha, mesmo sem achado: {\"arquivo\": \"<caminho>\", \"veredito\": \"limpo\"}. Toda citação arquivo:linha (caminho a partir da raiz do repo) tem de apontar para uma linha que existe. Ao terminar, responda só \"feito\".",
+  "prompt": "Propósito: {proposito}. Pergunta do diretor: {pergunta}\n\nVocê é uma fatia de uma varredura maior, feita por muitas fatias em paralelo (commit {sha}). Leia SOMENTE estes arquivos:\n{arquivos}\n\nCite código de fora da fatia apenas como evidência, sem varrê-lo. Grave o resultado em {saida}: um objeto JSON por linha (JSONL), sem cercas de código, sem comentário, nada além do arquivo. Inventarie se cada arquivo está em uso. Chaves por linha: arquivo, veredito (vivo | morto | legado | limpo), quem_usa (lista de arquivos que o importam ou chamam; vazia se ninguém) e evidencia (lista de citações arquivo:linha, como o import). Antes de dizer \"morto\", busque no repo inteiro as TRÊS formas de uso e liste em buscas (uma string por busca, com o padrão usado e quantos resultados deu): (1) import pelo atalho (@/caminho sem extensão); (2) import relativo (./nome, ../pasta/nome, sem extensão, e a pasta quando o arquivo é index); (3) o caminho como texto (readFileSync, glob, import() dinâmico, scripts, configs e workflows). Qualquer resultado fora do próprio arquivo e fora de teste dele vira \"vivo\", com a citação em evidencia. Linha \"morto\" sem buscas é recusada. Todo arquivo da fatia precisa de ao menos uma linha, mesmo sem achado: {\"arquivo\": \"<caminho>\", \"veredito\": \"limpo\"}. Se a pergunta do diretor pede outros campos (camada, sistema, tabelas, destino...), inclua-os também em cada linha, com os nomes que ela usa. Toda citação arquivo:linha (caminho a partir da raiz do repo) tem de apontar para uma linha que existe. Ao terminar, responda só \"feito\".",
   "chaves": [
     "arquivo",
     "veredito",
@@ -11,5 +11,10 @@
     "morto",
     "legado",
     "limpo"
-  ]
+  ],
+  "exigidas_por_veredito": {
+    "morto": [
+      "buscas"
+    ]
+  }
 }

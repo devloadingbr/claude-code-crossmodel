@@ -72,6 +72,24 @@ test('validarFatia aceita uma fatia completa com "limpo" e citação válida', (
   assert.equal(r.ok, true, JSON.stringify(r));
 });
 
+test('inventário: "morto" sem buscas é recusado; com as buscas e campos extras da pergunta, passa', () => {
+  const p = carregarPreset('inventario');
+  assert.equal(p.ok, true);
+  const morto = { arquivo: 'src/a.ts', veredito: 'morto', quem_usa: [], evidencia: [] };
+  const sem = validarFatia([JSON.stringify(morto)], ['src/a.ts'], p.valor, lerDe({}));
+  assert.equal(sem.ok, false);
+  assert.match(sem.motivos.join(' '), /buscas/);
+  const vazia = validarFatia([JSON.stringify({ ...morto, buscas: [] })], ['src/a.ts'], p.valor, lerDe({}));
+  assert.equal(vazia.ok, false);
+  const com = { ...morto, buscas: ['@/a: 0', './a e ../a: 0', '"src/a.ts": 0'], camada: 'back' };
+  const r = validarFatia([JSON.stringify(com)], ['src/a.ts'], p.valor, lerDe({}));
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.linhas[0].camada, 'back');
+  // controle: "vivo" não precisa de buscas
+  const vivo = validarFatia([JSON.stringify({ arquivo: 'src/a.ts', veredito: 'vivo', quem_usa: ['src/b.ts'], evidencia: [] })], ['src/a.ts'], p.valor, lerDe({}));
+  assert.equal(vivo.ok, true, JSON.stringify(vivo));
+});
+
 test('validarFatia reprova JSONL inválido', () => {
   const r = validarFatia(['{isto não é json', JSON.stringify({ arquivo: 'src/a.ts', severidade: 'limpo' })], ['src/a.ts'], PRESET, lerDe({}));
   assert.equal(r.ok, false);
